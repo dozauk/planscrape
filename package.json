@@ -1,0 +1,22 @@
+{
+  "name": "planscrape",
+  "version": "1.0.0",
+  "description": "Weekly planning application digest scraper",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "build": "tsc",
+    "start:built": "node dist/index.js"
+  },
+  "dependencies": {
+    "date-fns": "^3.6.0",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.50.1",
+    "resend": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}
