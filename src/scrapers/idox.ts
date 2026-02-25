@@ -85,7 +85,21 @@ async function runSearch(
   });
   console.log(`[${council}] "${caseTypeLabel}" search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
 
-  await page.selectOption('select[name="searchCriteria.caseType"]', { label: caseTypeLabel });
+  // Find the exact option label using a case-insensitive match — portals differ in capitalisation
+  // e.g. TW: "Permission in Principle" vs Sevenoaks: "Permission In Principle"
+  const exactLabel = await page.evaluate((label) => {
+    const sel = document.querySelector('select[name="searchCriteria.caseType"]') as HTMLSelectElement | null;
+    if (!sel) return null;
+    const opt = Array.from(sel.options).find((o) => o.text.trim().toLowerCase() === label.toLowerCase());
+    return opt ? opt.text.trim() : null;
+  }, caseTypeLabel);
+
+  if (!exactLabel) {
+    console.log(`[${council}] "${caseTypeLabel}": option not available on this portal, skipping`);
+    return [];
+  }
+
+  await page.selectOption('select[name="searchCriteria.caseType"]', { label: exactLabel });
 
   // Fill decision date range (dd/MM/yyyy)
   await page.fill('input[name="date(applicationDecisionStart)"]', formatDate(from));
