@@ -7,8 +7,14 @@ import path from 'path';
  * and any HTTP 4xx/5xx responses to stdout so they appear in CI logs.
  */
 export function attachDiagnosticListeners(page: Page, label: string): void {
+  const THIRD_PARTY = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
+    'facebook.com', 'twitter.com', 'googleapis.com', 'gstatic.com'];
+
   page.on('requestfailed', (req) => {
-    console.error(`[${label}] Request FAILED  ${req.failure()?.errorText ?? '?'} — ${req.url()}`);
+    const url = req.url();
+    const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+    if (THIRD_PARTY.some((d) => host.endsWith(d))) return;
+    console.error(`[${label}] Request FAILED  ${req.failure()?.errorText ?? '?'} — ${url}`);
   });
 
   page.on('console', (msg) => {
