@@ -47,6 +47,38 @@ function extractAfter(text: string, label: string): string {
 }
 
 /**
+ * When Idox has exactly one result it skips the list and redirects straight to
+ * the application detail page. Extract an Application from #simpleDetailsTable.
+ */
+async function extractSingleResult(page: Page, council: CouncilId): Promise<Application | undefined> {
+  const detailsurl = page.url();
+  const raw = await page.evaluate(() => {
+    const rows: Record<string, string> = {};
+    document.querySelectorAll('#simpleDetailsTable th[scope="row"]').forEach((th) => {
+      const key = th.textContent?.trim() ?? '';
+      const val = th.closest('tr')?.querySelector('td')?.textContent?.trim() ?? '';
+      if (key) rows[key] = val;
+    });
+    return rows;
+  });
+
+  const ref = raw['Reference'];
+  if (!ref) return undefined;
+
+  return {
+    council,
+    applreference: ref,
+    address: raw['Address'] ?? '',
+    description: raw['Proposal'] ?? '',
+    datereceived: parseIdoxDate(raw['Application Received'] ?? ''),
+    datevalidated: parseIdoxDate(raw['Application Validated'] ?? ''),
+    status: raw['Status'] && raw['Status'] !== 'Not Available' ? raw['Status'] : undefined,
+    decision: raw['Decision'] && raw['Decision'] !== 'Not Available' ? raw['Decision'] : undefined,
+    detailsurl,
+  };
+}
+
+/**
  * Visit an Idox application detail page and extract the Decision field value.
  * Returns undefined if the Decision row is absent or contains "Not Available".
  */
@@ -105,9 +137,17 @@ async function runSearch(
   await page.fill('input[name="date(applicationDecisionStart)"]', formatDate(from));
   await page.fill('input[name="date(applicationDecisionEnd)"]', formatDate(today));
 
-  // Submit and wait for results list or a no-results indicator
+  // Submit and wait for results list, no-results indicator, or single-result detail redirect
   await page.click('input[value="Search"], button[type="submit"]');
-  await page.waitForSelector('#searchresults, .noResults, .messagebox', { timeout: 60000 });
+  await page.waitForSelector('#searchresults, .noResults, .messagebox, #simpleDetailsTable', { timeout: 60000 });
+
+  // Idox redirects directly to the detail page when there is exactly one result
+  if ((await page.locator('#simpleDetailsTable').count()) > 0 &&
+      (await page.locator('#searchresults').count()) === 0) {
+    console.log(`[${council}] "${caseTypeLabel}": single result — extracting from detail page`);
+    const app = await extractSingleResult(page, council);
+    return app ? [app] : [];
+  }
 
   const results: Application[] = [];
   let pageNum = 1;
