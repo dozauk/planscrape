@@ -1,6 +1,7 @@
 import { Browser, Page } from 'playwright';
 import { format, subDays, parse } from 'date-fns';
 import { Application } from '../types';
+import { attachDiagnosticListeners, saveDebugSnapshot } from '../debug';
 
 const BASE_URL = 'https://planning.wealden.gov.uk';
 const MAX_PAGES = 20;
@@ -93,12 +94,14 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
 
   console.log('[Wealden] Starting scrape');
   const page = await browser.newPage();
+  attachDiagnosticListeners(page, 'Wealden');
 
   try {
-    await page.goto(`${BASE_URL}/Search/Advanced`, {
+    const resp = await page.goto(`${BASE_URL}/Search/Advanced`, {
       waitUntil: 'domcontentloaded',
       timeout: 60000,
     });
+    console.log(`[Wealden] Search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
 
     await acceptDisclaimer(page);
 
@@ -172,6 +175,9 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
 
     console.log(`[Wealden] Found ${all.length} applications`);
     return all;
+  } catch (err) {
+    await saveDebugSnapshot(page, 'Wealden', err);
+    throw err;
   } finally {
     await page.close();
   }

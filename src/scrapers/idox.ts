@@ -1,6 +1,7 @@
 import { Browser, Page } from 'playwright';
 import { format, subDays, parse } from 'date-fns';
 import { Application, CouncilId } from '../types';
+import { attachDiagnosticListeners, saveDebugSnapshot } from '../debug';
 
 export interface IdoxConfig {
   council: CouncilId;
@@ -73,12 +74,14 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
 
   console.log(`[${council}] Starting Idox scrape on ${baseUrl}`);
   const page = await browser.newPage();
+  attachDiagnosticListeners(page, council);
 
   try {
-    await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
+    const resp = await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
       waitUntil: 'domcontentloaded',
       timeout: 60000,
     });
+    console.log(`[${council}] Search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
 
     // Select "Full Application" by label text
     await page.selectOption('select[name="searchCriteria.caseType"]', { label: 'Full Application' });
@@ -160,6 +163,9 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
 
     console.log(`[${council}] Found ${all.length} applications`);
     return all;
+  } catch (err) {
+    await saveDebugSnapshot(page, council, err);
+    throw err;
   } finally {
     await page.close();
   }
