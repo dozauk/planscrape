@@ -9,6 +9,7 @@ export interface IdoxConfig {
 }
 
 const MAX_PAGES = 20;
+const CASE_TYPES = ['Full Application', 'Permission in Principle'];
 
 function formatDate(d: Date): string {
   return format(d, 'dd/MM/yyyy');
@@ -67,6 +68,97 @@ async function fetchDecision(page: Page, url: string): Promise<string | undefine
   }
 }
 
+/**
+ * Run one search (one case type) and return all paginated results.
+ */
+async function runSearch(
+  page: Page,
+  baseUrl: string,
+  council: CouncilId,
+  caseTypeLabel: string,
+  from: Date,
+  today: Date,
+): Promise<Application[]> {
+  const resp = await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+  console.log(`[${council}] "${caseTypeLabel}" search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
+
+  await page.selectOption('select[name="searchCriteria.caseType"]', { label: caseTypeLabel });
+
+  // Fill decision date range (dd/MM/yyyy)
+  await page.fill('input[name="date(applicationDecisionStart)"]', formatDate(from));
+  await page.fill('input[name="date(applicationDecisionEnd)"]', formatDate(today));
+
+  // Submit and wait for results list or a no-results indicator
+  await page.click('input[value="Search"], button[type="submit"]');
+  await page.waitForSelector('#searchresults, .noResults, .messagebox', { timeout: 60000 });
+
+  const results: Application[] = [];
+  let pageNum = 1;
+
+  while (pageNum <= MAX_PAGES) {
+    // Check for no-results message
+    const noResultsEl = page.locator('.noResults, .messagebox');
+    if (await noResultsEl.count() > 0) {
+      const msg = (await noResultsEl.first().textContent() ?? '').toLowerCase();
+      if (msg.includes('no result') || msg.includes('no match') || msg.includes('0 result')) {
+        console.log(`[${council}] "${caseTypeLabel}": no results`);
+        break;
+      }
+    }
+
+    console.log(`[${council}] "${caseTypeLabel}": parsing results page ${pageNum}`);
+
+    // Results are <li class="searchresult"> inside <ul id="searchresults">
+    const items = page.locator('#searchresults li.searchresult');
+    const count = await items.count();
+
+    for (let i = 0; i < count; i++) {
+      const item = items.nth(i);
+
+      // Description is the link text inside the summary link
+      const summaryLink = item.locator('a.summaryLink');
+      const description = (await summaryLink.locator('.summaryLinkTextClamp').textContent() ?? '').trim()
+        || (await summaryLink.textContent() ?? '').trim();
+
+      // Detail URL
+      const relHref = (await summaryLink.getAttribute('href') ?? '').trim();
+      const detailsurl = relHref.startsWith('http') ? relHref : `${baseUrl.replace(/\/online-applications$/, '')}${relHref}`;
+
+      // Address
+      const address = (await item.locator('p.address').textContent() ?? '').trim();
+
+      // Reference and dates are in p.metaInfo
+      const metaText = (await item.locator('p.metaInfo').textContent() ?? '').trim();
+
+      const applreference = extractAfter(metaText, 'Ref. No:');
+      const receivedRaw = extractAfter(metaText, 'Received:');
+      const validatedRaw = extractAfter(metaText, 'Validated:');
+      const status = extractAfter(metaText, 'Status:') || undefined;
+
+      const datereceived = parseIdoxDate(receivedRaw);
+      const datevalidated = parseIdoxDate(validatedRaw);
+
+      if (applreference) {
+        results.push({ council, applreference, address, description, datereceived, datevalidated, status, detailsurl });
+      }
+    }
+
+    // Pagination — Idox uses <a class="next">
+    const nextLink = page.locator('a.next').first();
+    if (await nextLink.count() === 0) break;
+
+    await nextLink.click();
+    // Wait for the results list to reload
+    await page.waitForSelector('#searchresults li.searchresult', { timeout: 30000 });
+    pageNum++;
+  }
+
+  return results;
+}
+
 export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack = 7): Promise<Application[]> {
   const { council, baseUrl } = config;
   const today = new Date();
@@ -77,82 +169,11 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
   attachDiagnosticListeners(page, council);
 
   try {
-    const resp = await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-    console.log(`[${council}] Search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
-
-    // Select "Full Application" by label text
-    await page.selectOption('select[name="searchCriteria.caseType"]', { label: 'Full Application' });
-
-    // Fill decision date range (dd/MM/yyyy)
-    await page.fill('input[name="date(applicationDecisionStart)"]', formatDate(from));
-    await page.fill('input[name="date(applicationDecisionEnd)"]', formatDate(today));
-
-    // Submit and wait for results list or a no-results indicator
-    await page.click('input[value="Search"], button[type="submit"]');
-    await page.waitForSelector('#searchresults, .noResults, .messagebox', { timeout: 60000 });
-
     const all: Application[] = [];
-    let pageNum = 1;
 
-    while (pageNum <= MAX_PAGES) {
-      // Check for no-results message
-      const noResultsEl = page.locator('.noResults, .messagebox');
-      if (await noResultsEl.count() > 0) {
-        const msg = (await noResultsEl.first().textContent() ?? '').toLowerCase();
-        if (msg.includes('no result') || msg.includes('no match') || msg.includes('0 result')) {
-          console.log(`[${council}] No results found`);
-          break;
-        }
-      }
-
-      console.log(`[${council}] Parsing results page ${pageNum}`);
-
-      // Results are <li class="searchresult"> inside <ul id="searchresults">
-      const items = page.locator('#searchresults li.searchresult');
-      const count = await items.count();
-
-      for (let i = 0; i < count; i++) {
-        const item = items.nth(i);
-
-        // Description is the link text inside the summary link
-        const summaryLink = item.locator('a.summaryLink');
-        const description = (await summaryLink.locator('.summaryLinkTextClamp').textContent() ?? '').trim()
-          || (await summaryLink.textContent() ?? '').trim();
-
-        // Detail URL
-        const relHref = (await summaryLink.getAttribute('href') ?? '').trim();
-        const detailsurl = relHref.startsWith('http') ? relHref : `${baseUrl.replace(/\/online-applications$/, '')}${relHref}`;
-
-        // Address
-        const address = (await item.locator('p.address').textContent() ?? '').trim();
-
-        // Reference and dates are in p.metaInfo
-        const metaText = (await item.locator('p.metaInfo').textContent() ?? '').trim();
-
-        const applreference = extractAfter(metaText, 'Ref. No:');
-        const receivedRaw = extractAfter(metaText, 'Received:');
-        const validatedRaw = extractAfter(metaText, 'Validated:');
-        const status = extractAfter(metaText, 'Status:') || undefined;
-
-        const datereceived = parseIdoxDate(receivedRaw);
-        const datevalidated = parseIdoxDate(validatedRaw);
-
-        if (applreference) {
-          all.push({ council, applreference, address, description, datereceived, datevalidated, status, detailsurl });
-        }
-      }
-
-      // Pagination — Idox uses <a class="next">
-      const nextLink = page.locator('a.next').first();
-      if (await nextLink.count() === 0) break;
-
-      await nextLink.click();
-      // Wait for the results list to reload
-      await page.waitForSelector('#searchresults li.searchresult', { timeout: 30000 });
-      pageNum++;
+    for (const caseType of CASE_TYPES) {
+      const results = await runSearch(page, baseUrl, council, caseType, from, today);
+      all.push(...results);
     }
 
     // Fetch decision from each application's detail page
