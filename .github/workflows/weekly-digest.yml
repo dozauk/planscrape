@@ -26,6 +26,16 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
+      - name: Probe council sites
+        run: |
+          for url in \
+            "https://twbcpa.midkent.gov.uk/online-applications/search.do?action=advanced&searchType=Application" \
+            "https://pa.sevenoaks.gov.uk/online-applications/search.do?action=advanced&searchType=Application" \
+            "https://planning.wealden.gov.uk/Search/Advanced"; do
+            echo "--- $url"
+            curl -sS --max-time 15 -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s  dns=%{time_namelookup}s  connect=%{time_connect}s  ssl=%{time_appconnect}s\n" "$url" || echo "FAILED (exit $?)"
+          done
+
       - name: Run scraper & send digest
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
