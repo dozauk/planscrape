@@ -30,40 +30,46 @@ async function acceptDisclaimer(page: Page): Promise<void> {
 }
 
 async function parseResultsPage(page: Page): Promise<Application[]> {
-  const rows = page.locator('table.tblResults tbody tr');
-  const count = await rows.count();
-  const results: Application[] = [];
+  // Extract all row data in a single synchronous evaluate() call so that
+  // AJAX DOM updates cannot race between individual async locator reads.
+  const rawRows = await page.evaluate((baseUrl) => {
+    const out: Array<{
+      applreference: string;
+      relHref: string;
+      address: string;
+      description: string;
+      dateRaw: string;
+      statusRaw: string;
+    }> = [];
+    document.querySelectorAll('table.tblResults tbody tr').forEach((row) => {
+      const cells = row.querySelectorAll('td');
+      if (cells.length < 7) return;
+      const link = cells[0].querySelector('a');
+      if (!link) return;
+      const applreference = link.textContent?.trim() ?? '';
+      const relHref = link.getAttribute('href')?.trim() ?? '';
+      if (!applreference || !relHref) return;
+      out.push({
+        applreference,
+        relHref,
+        address: cells[2].textContent?.trim() ?? '',
+        description: cells[3].textContent?.trim() ?? '',
+        dateRaw: cells[4].textContent?.trim() ?? '',
+        statusRaw: cells[6].textContent?.trim() ?? '',
+      });
+    });
+    return out;
+  }, BASE_URL);
 
-  for (let i = 0; i < count; i++) {
-    const row = rows.nth(i);
-    const cells = row.locator('td');
-    if (await cells.count() < 7) continue;
-
-    // Col 0: reference + detail link
-    const refCell = cells.nth(0);
-    const link = refCell.locator('a').first();
-    const applreference = (await link.textContent() ?? '').trim();
-    const relHref = (await link.getAttribute('href') ?? '').trim();
-    if (!applreference || !relHref) continue;
-    const detailsurl = relHref.startsWith('http') ? relHref : `${BASE_URL}${relHref}`;
-
-    // Col 2: Location/Address
-    const address = (await cells.nth(2).textContent() ?? '').trim();
-
-    // Col 3: Description
-    const description = (await cells.nth(3).textContent() ?? '').trim();
-
-    // Col 4: Date Validated
-    const datevalidated = parseWealdenDate(await cells.nth(4).textContent() ?? '');
-
-    // Col 6: Status Decision
-    const statusRaw = (await cells.nth(6).textContent() ?? '').trim();
-    const status = statusRaw && statusRaw !== '-' ? statusRaw : undefined;
-
-    results.push({ council: 'Wealden', applreference, address, description, datevalidated, status, detailsurl });
-  }
-
-  return results;
+  return rawRows.map(({ applreference, relHref, address, description, dateRaw, statusRaw }) => ({
+    council: 'Wealden' as const,
+    applreference,
+    address,
+    description,
+    datevalidated: parseWealdenDate(dateRaw),
+    status: statusRaw && statusRaw !== '-' ? statusRaw : undefined,
+    detailsurl: relHref.startsWith('http') ? relHref : `${BASE_URL}${relHref}`,
+  }));
 }
 
 /**
