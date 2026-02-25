@@ -12,13 +12,21 @@ const RETRY_DELAY_MS = 20_000;
 
 /**
  * Run fn up to `attempts` times, waiting `delayMs` between failures.
+ * Calls onRetry (if provided) before each retry — used to restart the browser.
  * Logs each attempt. Throws the last error if all attempts fail.
  */
-async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+async function withRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  onRetry?: () => Promise<void>,
+): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     try {
-      if (attempt > 1) console.log(`[${label}] Retry attempt ${attempt}/${RETRY_ATTEMPTS}`);
+      if (attempt > 1) {
+        console.log(`[${label}] Retry attempt ${attempt}/${RETRY_ATTEMPTS} — restarting browser`);
+        await onRetry?.();
+      }
       return await fn();
     } catch (err) {
       lastErr = err;
@@ -39,15 +47,24 @@ async function main(): Promise<void> {
 
   console.log(`\nPlanning digest scrape — ${periodLabel}\n`);
 
-  const browser = await chromium.launch({ headless: true });
+  let browser = await chromium.launch({ headless: true });
   const applications: Application[] = [];
   const errors: { council: string; message: string }[] = [];
+
+  // Closes the current browser and launches a fresh one before each retry.
+  // The scraper closures below capture `browser` by reference so they
+  // automatically pick up the new instance.
+  const restartBrowser = async () => {
+    await browser.close().catch(() => {});
+    browser = await chromium.launch({ headless: true });
+  };
 
   try {
     // Tunbridge Wells
     try {
-      const tw = await withRetry('TW', () =>
-        scrapeIdox(browser, { council: 'TW', baseUrl: 'https://twbcpa.midkent.gov.uk/online-applications' }, DAYS_BACK)
+      const tw = await withRetry('TW',
+        () => scrapeIdox(browser, { council: 'TW', baseUrl: 'https://twbcpa.midkent.gov.uk/online-applications' }, DAYS_BACK),
+        restartBrowser,
       );
       if (tw.length === 0) console.warn('[TW] Warning: scraper returned 0 results');
       applications.push(...tw);
@@ -58,8 +75,9 @@ async function main(): Promise<void> {
 
     // Sevenoaks
     try {
-      const sev = await withRetry('Sevenoaks', () =>
-        scrapeIdox(browser, { council: 'Sevenoaks', baseUrl: 'https://pa.sevenoaks.gov.uk/online-applications' }, DAYS_BACK)
+      const sev = await withRetry('Sevenoaks',
+        () => scrapeIdox(browser, { council: 'Sevenoaks', baseUrl: 'https://pa.sevenoaks.gov.uk/online-applications' }, DAYS_BACK),
+        restartBrowser,
       );
       if (sev.length === 0) console.warn('[Sevenoaks] Warning: scraper returned 0 results');
       applications.push(...sev);
@@ -70,7 +88,10 @@ async function main(): Promise<void> {
 
     // Wealden
     try {
-      const wea = await withRetry('Wealden', () => scrapeWealden(browser, DAYS_BACK));
+      const wea = await withRetry('Wealden',
+        () => scrapeWealden(browser, DAYS_BACK),
+        restartBrowser,
+      );
       if (wea.length === 0) console.warn('[Wealden] Warning: scraper returned 0 results');
       applications.push(...wea);
     } catch (err) {
