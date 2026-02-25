@@ -50,7 +50,7 @@ function extractAfter(text: string, label: string): string {
  */
 async function fetchDecision(page: Page, url: string): Promise<string | undefined> {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     return await page.evaluate(() => {
       const ths = Array.from(document.querySelectorAll('#simpleDetailsTable th[scope="row"]'));
       for (const th of ths) {
@@ -77,7 +77,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
   try {
     await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: 60000,
     });
 
     // Select "Full Application" by label text
@@ -89,7 +89,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
 
     // Submit and wait for results list or a no-results indicator
     await page.click('input[value="Search"], button[type="submit"]');
-    await page.waitForSelector('#searchresults, .noResults, .messagebox', { timeout: 30000 });
+    await page.waitForSelector('#searchresults, .noResults, .messagebox', { timeout: 60000 });
 
     const all: Application[] = [];
     let pageNum = 1;
@@ -148,7 +148,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
 
       await nextLink.click();
       // Wait for the results list to reload
-      await page.waitForSelector('#searchresults li.searchresult', { timeout: 20000 });
+      await page.waitForSelector('#searchresults li.searchresult', { timeout: 30000 });
       pageNum++;
     }
 

@@ -71,7 +71,7 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
  */
 async function fetchDecision(page: Page, url: string): Promise<string | undefined> {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     return await page.evaluate(() => {
       const tds = Array.from(document.querySelectorAll('#summarytable td[role="rowheader"]'));
       for (const td of tds) {
@@ -97,7 +97,7 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
   try {
     await page.goto(`${BASE_URL}/Search/Advanced`, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: 60000,
     });
 
     await acceptDisclaimer(page);
@@ -134,11 +134,11 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
 
     // Submit using the button inside the #advanced tab pane
     await page.locator('#advanced button[type="submit"]').click();
-    await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+    await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
 
     // Wait for results table
     try {
-      await page.waitForSelector('table.tblResults tbody tr', { timeout: 20000 });
+      await page.waitForSelector('table.tblResults tbody tr', { timeout: 30000 });
     } catch {
       console.log('[Wealden] No results table found — may be empty');
       return [];

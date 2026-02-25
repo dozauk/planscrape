@@ -50,7 +50,23 @@ function buildCouncilTable(apps: Application[]): string {
   </table>`;
 }
 
-function buildHtml(applications: Application[], periodLabel: string): string {
+function buildErrorBanner(errors: { council: string; message: string }[]): string {
+  if (errors.length === 0) return '';
+  const rows = errors.map((e) => `
+    <tr>
+      <td style="padding:6px 8px;border:1px solid #fca5a5;font-weight:bold;">${escapeHtml(e.council)}</td>
+      <td style="padding:6px 8px;border:1px solid #fca5a5;font-family:monospace;font-size:12px;">${escapeHtml(e.message)}</td>
+    </tr>`).join('');
+  return `
+  <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:4px;padding:12px 16px;margin-bottom:24px;">
+    <strong style="color:#b91c1c;">⚠️ ${errors.length} scraper${errors.length > 1 ? 's' : ''} failed — results below may be incomplete</strong>
+    <table style="border-collapse:collapse;width:100%;font-size:13px;margin-top:8px;">
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function buildHtml(applications: Application[], periodLabel: string, errors: { council: string; message: string }[] = []): string {
   const councils: CouncilId[] = ['TW', 'Sevenoaks', 'Wealden'];
   const total = applications.length;
 
@@ -69,6 +85,7 @@ function buildHtml(applications: Application[], periodLabel: string): string {
   <h1 style="font-size:20px;border-bottom:2px solid #e5e7eb;padding-bottom:8px;">
     Planning Applications Digest — ${escapeHtml(periodLabel)}
   </h1>
+  ${buildErrorBanner(errors)}
   <p style="color:#6b7280;font-size:13px;">
     <strong>${total}</strong> Full planning application${total !== 1 ? 's' : ''} validated across 3 councils.
   </p>
@@ -81,9 +98,15 @@ function buildHtml(applications: Application[], periodLabel: string): string {
 </html>`;
 }
 
-function buildText(applications: Application[], periodLabel: string): string {
+function buildText(applications: Application[], periodLabel: string, errors: { council: string; message: string }[] = []): string {
   const councils: CouncilId[] = ['TW', 'Sevenoaks', 'Wealden'];
   const lines = [`Planning Applications Digest — ${periodLabel}`, ''];
+
+  if (errors.length > 0) {
+    lines.push(`⚠️  ${errors.length} scraper(s) failed — results may be incomplete`);
+    for (const e of errors) lines.push(`  ${e.council}: ${e.message}`);
+    lines.push('');
+  }
 
   for (const id of councils) {
     const apps = applications.filter((a) => a.council === id);
@@ -114,16 +137,21 @@ export async function sendDigest(
   to: string,
   from: string,
   periodLabel: string,
-  apiKey: string
+  apiKey: string,
+  errors: { council: string; message: string }[] = []
 ): Promise<void> {
   const resend = new Resend(apiKey);
+
+  const subject = errors.length > 0
+    ? `⚠️ Planning Digest (${errors.length} scraper failure${errors.length > 1 ? 's' : ''}) — ${periodLabel}`
+    : `Planning Digest: ${applications.length} applications — ${periodLabel}`;
 
   const { error } = await resend.emails.send({
     from,
     to,
-    subject: `Planning Digest: ${applications.length} applications — ${periodLabel}`,
-    html: buildHtml(applications, periodLabel),
-    text: buildText(applications, periodLabel),
+    subject,
+    html: buildHtml(applications, periodLabel, errors),
+    text: buildText(applications, periodLabel, errors),
   });
 
   if (error) {
