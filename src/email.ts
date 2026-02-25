@@ -134,7 +134,7 @@ function buildText(applications: Application[], periodLabel: string, errors: { c
 
 export async function sendDigest(
   applications: Application[],
-  to: string,
+  to: string | string[],
   from: string,
   periodLabel: string,
   apiKey: string,

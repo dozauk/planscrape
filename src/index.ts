@@ -90,7 +90,7 @@ async function main(): Promise<void> {
 
   // Send email if configured
   const apiKey = process.env.RESEND_API_KEY;
-  const emailTo = process.env.EMAIL_TO;
+  const emailTo = process.env.EMAIL_TO?.split(',').map((s) => s.trim()).filter(Boolean);
   const emailFrom = process.env.EMAIL_FROM ?? 'onboarding@resend.dev';
 
   if (apiKey && emailTo) {
