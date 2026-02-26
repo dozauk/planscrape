@@ -1,14 +1,17 @@
-name: Weekly Planning Digest
+name: Weekly Digest Email
 
 on:
   schedule:
-    - cron: '0 7 * * 1'   # Every Monday at 07:00 UTC
-  workflow_dispatch:        # Allow manual trigger from GitHub UI
+    - cron: '0 8 * * 1'   # Every Monday at 08:00 UTC (1h after daily scrape)
+  workflow_dispatch:        # Allow manual trigger
+
+permissions:
+  actions: read
 
 jobs:
   digest:
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
       - name: Download source
@@ -21,30 +24,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright Chromium
-        run: npx playwright install chromium
-
-      - name: Probe council sites
+      - name: Download DB artifact
         run: |
-          for url in \
-            "https://twbcpa.midkent.gov.uk/online-applications/search.do?action=advanced&searchType=Application" \
-            "https://pa.sevenoaks.gov.uk/online-applications/search.do?action=advanced&searchType=Application" \
-            "https://planning.wealden.gov.uk/Search/Advanced"; do
-            echo "--- $url"
-            curl -sS --max-time 15 -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s  dns=%{time_namelookup}s  connect=%{time_connect}s  ssl=%{time_appconnect}s\n" "$url" || echo "FAILED (exit $?)"
-          done
+          ARTIFACT_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100&name=planscrape-db" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty')
+          if [ -n "$ARTIFACT_ID" ] && [ "$ARTIFACT_ID" != "null" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > planscrape-db.zip
+            unzip -o planscrape-db.zip && rm planscrape-db.zip
+            echo "DB downloaded"
+          else
+            echo "No DB artifact found — cannot send digest" && exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run scraper & send digest
+      - name: Send digest email
+        run: npm run start:digest
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-        run: npm start
-
-      - name: Upload debug snapshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-snapshots
-          path: debug/
-          if-no-files-found: ignore

@@ -38,7 +38,8 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
       relHref: string;
       address: string;
       description: string;
-      dateRaw: string;
+      datevalidatedRaw: string;
+      decisionDateRaw: string;   // col 5 — decision date
       statusRaw: string;
     }> = [];
     document.querySelectorAll('table.tblResults tbody tr').forEach((row) => {
@@ -54,43 +55,60 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
         relHref,
         address: cells[2].textContent?.trim() ?? '',
         description: cells[3].textContent?.trim() ?? '',
-        dateRaw: cells[4].textContent?.trim() ?? '',
+        datevalidatedRaw: cells[4].textContent?.trim() ?? '',
+        decisionDateRaw:  cells[5].textContent?.trim() ?? '',
         statusRaw: cells[6].textContent?.trim() ?? '',
       });
     });
     return out;
   }, BASE_URL);
 
-  return rawRows.map(({ applreference, relHref, address, description, dateRaw, statusRaw }) => ({
+  return rawRows.map(({ applreference, relHref, address, description, datevalidatedRaw, decisionDateRaw, statusRaw }) => ({
     council: 'Wealden' as const,
     applreference,
     address,
     description,
-    datevalidated: parseWealdenDate(dateRaw),
+    datevalidated: parseWealdenDate(datevalidatedRaw),
+    decision_date: parseWealdenDate(decisionDateRaw),
     status: statusRaw && statusRaw !== '-' ? statusRaw : undefined,
     detailsurl: relHref.startsWith('http') ? relHref : `${BASE_URL}${relHref}`,
   }));
 }
 
+interface DetailData {
+  decision?: string;
+  decision_date?: string;
+  appeal_decision?: string;
+  appeal_date?: string;
+}
+
 /**
- * Visit a Wealden application detail page and extract the Decision field value.
- * Returns undefined if Decision is absent, blank, or "N/A".
+ * Visit a Wealden detail page and extract decision + appeal fields.
+ * Returns raw date strings from the browser, then parses them in Node.js.
  */
-async function fetchDecision(page: Page, url: string): Promise<string | undefined> {
+async function fetchDetail(page: Page, url: string): Promise<DetailData> {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    return await page.evaluate(() => {
-      const tds = Array.from(document.querySelectorAll('#summarytable td[role="rowheader"]'));
-      for (const td of tds) {
-        if (td.querySelector('strong')?.textContent?.trim() === 'Decision') {
-          const text = td.closest('tr')?.querySelector('td.text-character-wrap')?.textContent?.trim();
-          return text && text !== 'N/A' ? text : undefined;
-        }
-      }
-      return undefined;
+    const raw = await page.evaluate(() => {
+      const rows: Record<string, string> = {};
+      document.querySelectorAll('#summarytable tr').forEach((row) => {
+        const label = row.querySelector('td[role="rowheader"] strong')?.textContent?.trim() ?? '';
+        const val = row.querySelector('td.text-character-wrap')?.textContent?.trim() ?? '';
+        if (label && val && val !== 'N/A') rows[label] = val;
+      });
+      return rows;
     });
+    const notNA = (v: string | undefined) => (v && v !== 'N/A' ? v : undefined);
+    return {
+      decision: notNA(raw['Decision']),
+      decision_date: parseWealdenDate(
+        raw['Decision Issued Date'] ?? raw['Decision Date'] ?? '',
+      ),
+      appeal_decision: notNA(raw['Appeal Decision']),
+      appeal_date: parseWealdenDate(raw['Appeal Decision Date'] ?? raw['Appeal Date'] ?? ''),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -161,22 +179,40 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
       const pageResults = await parseResultsPage(page);
       all.push(...pageResults);
 
-      // Pagination uses AJAX — look for "Next Page." link
+      // Pagination: the "Next Page" link uses AJAX and its DOM node is replaced
+      // by the server before Playwright can click it (detached from DOM error).
+      // Fix: fire the click via JS (no stability wait), then wait for the AJAX
+      // response before reading the updated table.
+      // Direct page.goto() doesn't work — Wealden requires server-side session.
       const nextLink = page.locator('ul.ajax-pager a[aria-label="Next Page."]');
       if (await nextLink.count() === 0) break;
 
-      await nextLink.click();
-      // Wait for AJAX to complete and update the results container
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
-      // Confirm table is still present after AJAX update
+      await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes('/Search/ResultsPage') && r.status() < 400,
+          { timeout: 15000 },
+        ),
+        page.evaluate(() => {
+          const el = document.querySelector(
+            'ul.ajax-pager a[aria-label="Next Page."]',
+          ) as HTMLAnchorElement | null;
+          el?.click();
+        }),
+      ]);
       await page.waitForSelector('table.tblResults tbody tr', { timeout: 10000 });
       pageNum++;
     }
 
-    // Fetch decision from each application's detail page
-    console.log(`[Wealden] Fetching decisions from ${all.length} detail pages`);
+    // Fetch decision + appeal fields from each application's detail page
+    console.log(`[Wealden] Fetching details from ${all.length} detail pages`);
     for (const app of all) {
-      app.decision = await fetchDecision(page, app.detailsurl);
+      const detail = await fetchDetail(page, app.detailsurl);
+      // Prefer detail-page values where available; fall back to what the
+      // results table already gave us (e.g. decision_date from col 5).
+      app.decision        = detail.decision        ?? app.decision;
+      app.decision_date   = detail.decision_date   ?? app.decision_date;
+      app.appeal_decision = detail.appeal_decision ?? app.appeal_decision;
+      app.appeal_date     = detail.appeal_date     ?? app.appeal_date;
     }
 
     console.log(`[Wealden] Found ${all.length} applications`);

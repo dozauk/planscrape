@@ -65,6 +65,7 @@ async function extractSingleResult(page: Page, council: CouncilId): Promise<Appl
   const ref = raw['Reference'];
   if (!ref) return undefined;
 
+  const notAvail = (v: string | undefined) => (v && v !== 'Not Available' ? v : undefined);
   return {
     council,
     applreference: ref,
@@ -72,31 +73,50 @@ async function extractSingleResult(page: Page, council: CouncilId): Promise<Appl
     description: raw['Proposal'] ?? '',
     datereceived: parseIdoxDate(raw['Application Received'] ?? ''),
     datevalidated: parseIdoxDate(raw['Application Validated'] ?? ''),
-    status: raw['Status'] && raw['Status'] !== 'Not Available' ? raw['Status'] : undefined,
-    decision: raw['Decision'] && raw['Decision'] !== 'Not Available' ? raw['Decision'] : undefined,
+    status: notAvail(raw['Status']),
+    decision: notAvail(raw['Decision']),
+    decision_date: parseIdoxDate(
+      raw['Decision Issued Date'] ?? raw['Decision Date'] ?? raw['Date Decision Issued'] ?? '',
+    ),
+    appeal_decision: notAvail(raw['Appeal Decision']),
+    appeal_date: parseIdoxDate(raw['Appeal Decision Date'] ?? ''),
     detailsurl,
   };
 }
 
+interface DetailData {
+  decision?: string;
+  decision_date?: string;
+  appeal_decision?: string;
+  appeal_date?: string;
+}
+
 /**
- * Visit an Idox application detail page and extract the Decision field value.
- * Returns undefined if the Decision row is absent or contains "Not Available".
+ * Visit an Idox application detail page and extract decision + appeal fields.
+ * Reads all #simpleDetailsTable rows in one evaluate() call to avoid stale DOM.
  */
-async function fetchDecision(page: Page, url: string): Promise<string | undefined> {
+async function fetchDetail(page: Page, url: string): Promise<DetailData> {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    return await page.evaluate(() => {
-      const ths = Array.from(document.querySelectorAll('#simpleDetailsTable th[scope="row"]'));
-      for (const th of ths) {
-        if (th.textContent?.trim() === 'Decision') {
-          const text = th.closest('tr')?.querySelector('td')?.textContent?.trim();
-          return text && text !== 'Not Available' ? text : undefined;
-        }
-      }
-      return undefined;
+    const raw = await page.evaluate(() => {
+      const rows: Record<string, string> = {};
+      document.querySelectorAll('#simpleDetailsTable th[scope="row"]').forEach((th) => {
+        const key = th.textContent?.trim() ?? '';
+        const val = th.closest('tr')?.querySelector('td')?.textContent?.trim() ?? '';
+        if (key && val && val !== 'Not Available') rows[key] = val;
+      });
+      return rows;
     });
+    return {
+      decision: raw['Decision'] || undefined,
+      decision_date: parseIdoxDate(
+        raw['Decision Issued Date'] ?? raw['Decision Date'] ?? raw['Date Decision Issued'] ?? '',
+      ),
+      appeal_decision: raw['Appeal Decision'] || undefined,
+      appeal_date: parseIdoxDate(raw['Appeal Decision Date'] ?? ''),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -230,10 +250,16 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
       all.push(...results);
     }
 
-    // Fetch decision from each application's detail page
-    console.log(`[${council}] Fetching decisions from ${all.length} detail pages`);
+    // Fetch decision + appeal fields from each application's detail page.
+    // Small delay between requests to avoid 429 rate-limiting on some portals.
+    console.log(`[${council}] Fetching details from ${all.length} detail pages`);
     for (const app of all) {
-      app.decision = await fetchDecision(page, app.detailsurl);
+      const detail = await fetchDetail(page, app.detailsurl);
+      app.decision = detail.decision;
+      app.decision_date = detail.decision_date;
+      app.appeal_decision = detail.appeal_decision;
+      app.appeal_date = detail.appeal_date;
+      await page.waitForTimeout(2000);
     }
 
     console.log(`[${council}] Found ${all.length} applications`);

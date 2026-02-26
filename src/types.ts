@@ -5,9 +5,12 @@ export interface Application {
   applreference: string;
   address: string;
   description: string;
-  datereceived?: string;   // ISO date YYYY-MM-DD
-  datevalidated?: string;  // ISO date YYYY-MM-DD
+  datereceived?: string;    // ISO date YYYY-MM-DD
+  datevalidated?: string;   // ISO date YYYY-MM-DD
   status?: string;
   decision?: string;
+  decision_date?: string;   // ISO date YYYY-MM-DD
+  appeal_decision?: string;
+  appeal_date?: string;     // ISO date YYYY-MM-DD
   detailsurl: string;
 }
