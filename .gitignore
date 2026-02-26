@@ -6,3 +6,4 @@ debug/
 web-output/
 *.db
 prompt.txt
+email-preview.txt

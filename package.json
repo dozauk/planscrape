@@ -6,6 +6,7 @@
   "scripts": {
     "start": "ts-node src/index.ts",
     "start:digest": "ts-node src/digest.ts",
+    "preview": "ts-node src/preview.ts",
     "build": "tsc",
     "start:built": "node dist/index.js"
   },

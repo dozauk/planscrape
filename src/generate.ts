@@ -41,6 +41,12 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
     }
     #search:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px #e0e7ff; }
     .count { font-size: 12px; color: #6b7280; }
+    #clear-filters {
+      margin-left: auto; padding: 5px 12px; font-size: 12px; font-weight: 500;
+      border: 1px solid #d1d5db; border-radius: 6px; background: #fff;
+      color: #6b7280; cursor: pointer;
+    }
+    #clear-filters:hover { background: #f3f4f6; color: #374151; border-color: #9ca3af; }
     #table { background: #fff; border-radius: 8px; overflow: hidden;
              box-shadow: 0 1px 3px rgba(0,0,0,.08); }
     .tabulator { border: none !important; font-size: 13px; }
@@ -76,6 +82,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
   <div class="controls">
     <input id="search" type="text" placeholder="Search reference, address, description…">
     <span class="count" id="count"></span>
+    <button id="clear-filters">Clear Filters</button>
   </div>
 
   <div id="table"></div>
@@ -128,11 +135,15 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
 
     /**
      * Custom checkbox-dropdown header filter.
-     * entries: [{value, label}, ...]
+     * entries:       [{value, label}, ...]
+     * initialValues: string[] of values to pre-check (optional)
      * Attaches dropdown to document.body (fixed positioning) to escape
      * Tabulator's overflow:hidden header cells.
      */
-    function makeMultiCheckFilter(entries) {
+    const filterResets = [];
+
+    function makeMultiCheckFilter(entries, initialValues) {
+      initialValues = initialValues || [];
       return function(cell, onRendered, success) {
         const wrap = document.createElement('div');
         wrap.style.cssText = 'position:relative;width:100%;';
@@ -142,7 +153,6 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         btn.style.cssText = 'width:100%;text-align:left;padding:2px 6px;font-size:11px;' +
           'border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;' +
           'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#374151;';
-        btn.textContent = 'All';
         wrap.appendChild(btn);
 
         const drop = document.createElement('div');
@@ -160,14 +170,18 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
           const cb = document.createElement('input');
           cb.type = 'checkbox';
           cb.value = e.value;
+          cb.checked = initialValues.includes(e.value);
           cb.style.cssText = 'width:13px;height:13px;cursor:pointer;accent-color:#6366f1;flex-shrink:0;';
-          cb.addEventListener('change', function() {
+
+          function updateBtn() {
             const checked = checkboxes.filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
             btn.textContent = checked.length
               ? entries.filter(function(en){ return checked.includes(en.value); }).map(function(en){ return en.label; }).join(', ')
               : 'All';
-            success(checked);
-          });
+            return checked;
+          }
+
+          cb.addEventListener('change', function() { success(updateBtn()); });
 
           row.addEventListener('mouseenter', function(){ row.style.background = '#f5f3ff'; });
           row.addEventListener('mouseleave', function(){ row.style.background = ''; });
@@ -175,6 +189,22 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
           row.appendChild(document.createTextNode(e.label));
           drop.appendChild(row);
           checkboxes.push(cb);
+        });
+
+        // Set initial button text and activate initial filter once rendered
+        onRendered(function() {
+          const checked = checkboxes.filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+          btn.textContent = checked.length
+            ? entries.filter(function(en){ return checked.includes(en.value); }).map(function(en){ return en.label; }).join(', ')
+            : 'All';
+          if (checked.length) success(checked);
+        });
+
+        // Register a reset function for the Clear Filters button
+        filterResets.push(function() {
+          checkboxes.forEach(function(c){ c.checked = false; });
+          btn.textContent = 'All';
+          success([]);
         });
 
         let open = false;
@@ -219,6 +249,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       {value:'Sevenoaks', label:'Sevenoaks'},
       {value:'Wealden',   label:'Wealden'},
     ];
+    const DECISION_DEFAULTS = ['Application Permitted', 'Approval', 'Granted'];
 
     // Shared filter func: empty selection = show all; else must be in selection
     function multiFilterFunc(headerVal, rowVal) {
@@ -236,7 +267,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       columns: [
         {
           title: 'Priority', field: 'priority', widthGrow: 0.6, minWidth: 85,
-          headerFilter: makeMultiCheckFilter(PRIORITY_ENTRIES),
+          headerFilter: makeMultiCheckFilter(PRIORITY_ENTRIES, ['high']),
           headerFilterFunc: multiFilterFunc,
           headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => priorityBadge(cell.getValue()),
@@ -265,7 +296,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         { title: 'Validated',   field: 'datevalidated', widthGrow: 0.7, minWidth: 85, sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' } },
         {
           title: 'Decision', field: 'decision', widthGrow: 1.0, minWidth: 100,
-          headerFilter: makeMultiCheckFilter(colEntries('decision')),
+          headerFilter: makeMultiCheckFilter(colEntries('decision'), DECISION_DEFAULTS),
           headerFilterFunc: multiFilterFunc,
           headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
@@ -298,6 +329,13 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         { field: 'description',   type: 'like', value: v },
         { field: 'decision',      type: 'like', value: v },
       ]]);
+    });
+
+    // Clear Filters button — resets search box and all checkbox dropdowns
+    document.getElementById('clear-filters').addEventListener('click', function() {
+      document.getElementById('search').value = '';
+      table.clearFilter();
+      filterResets.forEach(function(reset){ reset(); });
     });
 
     function updateCount(rows) {

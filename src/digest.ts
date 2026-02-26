@@ -39,7 +39,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  await sendDigest(applications, emailTo, emailFrom, periodLabel, apiKey, [], priorities);
+  const webUrl = process.env.PLANSCRAPE_URL ?? 'https://www.doza.org/planscrape';
+  await sendDigest(applications, emailTo, emailFrom, periodLabel, apiKey, [], priorities, webUrl);
   console.log(`Digest sent to ${emailTo}`);
 }
 
