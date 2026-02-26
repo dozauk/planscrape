@@ -1,2 +1,2 @@
 Output at:
-https://doza.org/planscrape
+https://www.doza.org/planscrape
