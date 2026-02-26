@@ -38,7 +38,17 @@ export function openDb(dbPath: string): Database.Database {
       error TEXT
     );
   `);
+  migrateDb(db);
   return db;
+}
+
+/** Add new columns to existing DBs without breaking fresh installs. */
+function migrateDb(db: Database.Database): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(applications)').all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!existing.has('priority'))        db.exec('ALTER TABLE applications ADD COLUMN priority TEXT');
+  if (!existing.has('priority_reason')) db.exec('ALTER TABLE applications ADD COLUMN priority_reason TEXT');
 }
 
 export function upsertApplications(db: Database.Database, apps: Application[]): void {
@@ -128,13 +138,60 @@ export function getRecentApplications(db: Database.Database, days: number): Appl
   `).all({ cutoff: cutoffStr }) as Application[];
 }
 
-export function getApplicationsForDigest(db: Database.Database, days: number): Application[] {
+/**
+ * Return applications for the email digest.
+ * Pass `priorities` (e.g. ['high','medium']) to restrict to classified leads;
+ * omit to include everything regardless of classification status.
+ */
+export function getApplicationsForDigest(
+  db: Database.Database,
+  days: number,
+  priorities?: string[],
+): Application[] {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  if (priorities && priorities.length > 0) {
+    const placeholders = priorities.map(() => '?').join(',');
+    return db.prepare(`
+      SELECT * FROM applications
+      WHERE (decision_date >= ? OR appeal_date >= ?)
+        AND priority IN (${placeholders})
+      ORDER BY council, COALESCE(appeal_date, decision_date) DESC
+    `).all(cutoffStr, cutoffStr, ...priorities) as Application[];
+  }
+
   return db.prepare(`
     SELECT * FROM applications
-    WHERE decision_date >= @cutoff OR appeal_date >= @cutoff
+    WHERE decision_date >= ? OR appeal_date >= ?
     ORDER BY council, COALESCE(appeal_date, decision_date) DESC
-  `).all({ cutoff: cutoffStr }) as Application[];
+  `).all(cutoffStr, cutoffStr) as Application[];
+}
+
+/** Return applications that have not yet been classified (priority IS NULL). */
+export function getUnclassifiedApplications(
+  db: Database.Database,
+): Array<{ council: string; applreference: string; description: string }> {
+  return db.prepare(`
+    SELECT council, applreference, description FROM applications
+    WHERE priority IS NULL
+      AND description IS NOT NULL
+      AND description != ''
+    ORDER BY first_seen DESC
+  `).all() as Array<{ council: string; applreference: string; description: string }>;
+}
+
+/** Persist the LLM classification result for one application. */
+export function updatePriority(
+  db: Database.Database,
+  council: string,
+  applreference: string,
+  priority: string,
+  reason: string,
+): void {
+  db.prepare(`
+    UPDATE applications SET priority = ?, priority_reason = ?
+    WHERE council = ? AND applreference = ?
+  `).run(priority, reason, council, applreference);
 }

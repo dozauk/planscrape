@@ -2,8 +2,9 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import { scrapeIdox } from './scrapers/idox';
 import { scrapeWealden } from './scrapers/wealden';
-import { openDb, upsertApplications, logScrapeRun } from './db';
+import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, updatePriority } from './db';
 import { generateHtml } from './generate';
+import { isClassificationEnabled, classifyApplication } from './classify';
 
 const DAYS_BACK = 14;
 const RETRY_ATTEMPTS = 3;
@@ -34,6 +35,30 @@ async function withRetry<T>(
     }
   }
   throw lastErr;
+}
+
+async function classifyNew(db: ReturnType<typeof openDb>): Promise<void> {
+  if (!isClassificationEnabled()) {
+    console.log('[classify] ANTHROPIC_API_KEY / CLASSIFICATION_PROMPT not set — skipping');
+    return;
+  }
+
+  const unclassified = getUnclassifiedApplications(db);
+  if (unclassified.length === 0) {
+    console.log('[classify] All applications already classified');
+    return;
+  }
+
+  console.log(`[classify] Classifying ${unclassified.length} new application(s)…`);
+  for (const app of unclassified) {
+    const result = await classifyApplication(app.applreference, app.council, app.description);
+    if (result) {
+      updatePriority(db, app.council, app.applreference, result.priority, result.reason);
+      console.log(`[classify] ${app.council}/${app.applreference}: ${result.priority} — ${result.reason}`);
+    }
+    // Brief pause to avoid hitting API rate limits on large backlogs
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 async function main(): Promise<void> {
@@ -92,6 +117,9 @@ async function main(): Promise<void> {
       console.error(`[Wealden] Failed after ${RETRY_ATTEMPTS} attempts:`, err);
       errors.push({ council: 'Wealden', message: String(err) });
     }
+
+    // Classify any newly seen applications (no-op if API keys not configured)
+    await classifyNew(db);
 
   } finally {
     await browser.close();

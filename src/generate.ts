@@ -57,6 +57,11 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
     .council-tw  { color: #1d4ed8; font-weight: 600; }
     .council-sev { color: #6d28d9; font-weight: 600; }
     .council-wea { color: #0369a1; font-weight: 600; }
+    .pri-badge { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; display: inline-block; }
+    .pri-high   { background: #d1fae5; color: #065f46; }
+    .pri-medium { background: #fef3c7; color: #92400e; }
+    .pri-low    { background: #f3f4f6; color: #6b7280; font-weight: 400; }
+    .pri-none   { background: #f3f4f6; color: #9ca3af; font-weight: 400; }
   </style>
 </head>
 <body>
@@ -114,6 +119,13 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       return 'council-wea';
     }
 
+    // Priority badge helper
+    function priorityBadge(val) {
+      if (!val) return '<span style="color:#d1d5db;">—</span>';
+      const label = val.charAt(0).toUpperCase() + val.slice(1);
+      return '<span class="pri-badge pri-' + val + '">' + label + '</span>';
+    }
+
     const table = new Tabulator('#table', {
       data: DATA,
       layout: 'fitColumns',
@@ -123,6 +135,17 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       movableColumns: true,
       initialSort: [{ column: 'decision_date', dir: 'desc' }],
       columns: [
+        {
+          title: 'Priority', field: 'priority', widthGrow: 0.6, minWidth: 75,
+          headerFilter: 'list',
+          headerFilterParams: { values: { '': 'All', high: 'High', medium: 'Medium', low: 'Low', none: 'None' }, clearable: true },
+          formatter: (cell) => priorityBadge(cell.getValue()),
+          tooltip: (e, cell) => cell.getData().priority_reason || '',
+          sorter: (a, b) => {
+            const order = { high: 0, medium: 1, low: 2, none: 3 };
+            return (order[a] ?? 4) - (order[b] ?? 4);
+          },
+        },
         {
           title: 'Council', field: 'council', widthGrow: 0.7, minWidth: 80,
           headerFilter: 'list',

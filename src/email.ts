@@ -15,6 +15,19 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function priorityBadge(priority: string | null | undefined): string {
+  if (!priority) return '';
+  const styles: Record<string, string> = {
+    high:   'background:#d1fae5;color:#065f46;font-weight:bold;',
+    medium: 'background:#fef3c7;color:#92400e;font-weight:bold;',
+    low:    'background:#f3f4f6;color:#6b7280;',
+    none:   'background:#f3f4f6;color:#9ca3af;',
+  };
+  const style = styles[priority] ?? '';
+  const label = priority.charAt(0).toUpperCase() + priority.slice(1);
+  return `<span style="padding:1px 7px;border-radius:10px;font-size:11px;${style}">${label}</span>`;
+}
+
 function buildCouncilTable(apps: Application[]): string {
   if (apps.length === 0) return '<p style="color:#888;">No applications found in this period.</p>';
 
@@ -28,7 +41,7 @@ function buildCouncilTable(apps: Application[]): string {
       <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(a.address)}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(a.description)}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${escapeHtml(a.datevalidated ?? a.datereceived ?? '')}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${escapeHtml(a.status ?? '')}</td>
+      <td style="padding:6px 8px;border:1px solid #ddd;">${priorityBadge(a.priority)}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(a.decision ?? '')}</td>
     </tr>`
     )
@@ -42,7 +55,7 @@ function buildCouncilTable(apps: Application[]): string {
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Address</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Description</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Validated</th>
-        <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Status</th>
+        <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Priority</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Decision</th>
       </tr>
     </thead>
@@ -66,9 +79,17 @@ function buildErrorBanner(errors: { council: string; message: string }[]): strin
   </div>`;
 }
 
-function buildHtml(applications: Application[], periodLabel: string, errors: { council: string; message: string }[] = []): string {
+function buildHtml(
+  applications: Application[],
+  periodLabel: string,
+  errors: { council: string; message: string }[] = [],
+  priorities?: string[],
+): string {
   const councils: CouncilId[] = ['TW', 'Sevenoaks', 'Wealden'];
   const total = applications.length;
+  const filterNote = priorities
+    ? ` <span style="font-size:12px;color:#6b7280;font-weight:normal;">(${priorities.join(' &amp; ')} priority leads only)</span>`
+    : '';
 
   const sections = councils
     .map((id) => {
@@ -83,11 +104,11 @@ function buildHtml(applications: Application[], periodLabel: string, errors: { c
 <html>
 <body style="font-family:Arial,sans-serif;max-width:960px;margin:0 auto;padding:20px;color:#374151;">
   <h1 style="font-size:20px;border-bottom:2px solid #e5e7eb;padding-bottom:8px;">
-    Planning Applications Digest — ${escapeHtml(periodLabel)}
+    Planning Applications Digest — ${escapeHtml(periodLabel)}${filterNote}
   </h1>
   ${buildErrorBanner(errors)}
   <p style="color:#6b7280;font-size:13px;">
-    <strong>${total}</strong> Full planning application${total !== 1 ? 's' : ''} validated across 3 councils.
+    <strong>${total}</strong> application${total !== 1 ? 's' : ''} across 3 councils.
   </p>
   ${sections}
   <hr style="margin-top:40px;border:none;border-top:1px solid #e5e7eb;">
@@ -98,9 +119,15 @@ function buildHtml(applications: Application[], periodLabel: string, errors: { c
 </html>`;
 }
 
-function buildText(applications: Application[], periodLabel: string, errors: { council: string; message: string }[] = []): string {
+function buildText(
+  applications: Application[],
+  periodLabel: string,
+  errors: { council: string; message: string }[] = [],
+  priorities?: string[],
+): string {
   const councils: CouncilId[] = ['TW', 'Sevenoaks', 'Wealden'];
-  const lines = [`Planning Applications Digest — ${periodLabel}`, ''];
+  const filterNote = priorities ? ` [${priorities.join('/')} priority only]` : '';
+  const lines = [`Planning Applications Digest — ${periodLabel}${filterNote}`, ''];
 
   if (errors.length > 0) {
     lines.push(`⚠️  ${errors.length} scraper(s) failed — results may be incomplete`);
@@ -116,11 +143,12 @@ function buildText(applications: Application[], periodLabel: string, errors: { c
       lines.push('  No applications found.');
     } else {
       for (const a of apps) {
-        lines.push(`  ${a.applreference}`);
+        const pri = a.priority ? `[${a.priority.toUpperCase()}] ` : '';
+        lines.push(`  ${pri}${a.applreference}`);
         lines.push(`  ${a.address}`);
         lines.push(`  ${a.description}`);
+        if (a.priority_reason) lines.push(`  → ${a.priority_reason}`);
         if (a.datevalidated) lines.push(`  Validated: ${a.datevalidated}`);
-        if (a.status) lines.push(`  Status: ${a.status}`);
         if (a.decision) lines.push(`  Decision: ${a.decision}`);
         lines.push(`  ${a.detailsurl}`);
         lines.push('');
@@ -138,7 +166,8 @@ export async function sendDigest(
   from: string,
   periodLabel: string,
   apiKey: string,
-  errors: { council: string; message: string }[] = []
+  errors: { council: string; message: string }[] = [],
+  priorities?: string[],
 ): Promise<void> {
   const resend = new Resend(apiKey);
 
@@ -150,8 +179,8 @@ export async function sendDigest(
     from,
     to,
     subject,
-    html: buildHtml(applications, periodLabel, errors),
-    text: buildText(applications, periodLabel, errors),
+    html: buildHtml(applications, periodLabel, errors, priorities),
+    text: buildText(applications, periodLabel, errors, priorities),
   });
 
   if (error) {
