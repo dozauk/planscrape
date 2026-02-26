@@ -38,7 +38,8 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
       relHref: string;
       address: string;
       description: string;
-      dateRaw: string;
+      datevalidatedRaw: string;
+      decisionDateRaw: string;   // col 5 — decision date
       statusRaw: string;
     }> = [];
     document.querySelectorAll('table.tblResults tbody tr').forEach((row) => {
@@ -54,19 +55,21 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
         relHref,
         address: cells[2].textContent?.trim() ?? '',
         description: cells[3].textContent?.trim() ?? '',
-        dateRaw: cells[4].textContent?.trim() ?? '',
+        datevalidatedRaw: cells[4].textContent?.trim() ?? '',
+        decisionDateRaw:  cells[5].textContent?.trim() ?? '',
         statusRaw: cells[6].textContent?.trim() ?? '',
       });
     });
     return out;
   }, BASE_URL);
 
-  return rawRows.map(({ applreference, relHref, address, description, dateRaw, statusRaw }) => ({
+  return rawRows.map(({ applreference, relHref, address, description, datevalidatedRaw, decisionDateRaw, statusRaw }) => ({
     council: 'Wealden' as const,
     applreference,
     address,
     description,
-    datevalidated: parseWealdenDate(dateRaw),
+    datevalidated: parseWealdenDate(datevalidatedRaw),
+    decision_date: parseWealdenDate(decisionDateRaw),
     status: statusRaw && statusRaw !== '-' ? statusRaw : undefined,
     detailsurl: relHref.startsWith('http') ? relHref : `${BASE_URL}${relHref}`,
   }));
@@ -204,10 +207,12 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
     console.log(`[Wealden] Fetching details from ${all.length} detail pages`);
     for (const app of all) {
       const detail = await fetchDetail(page, app.detailsurl);
-      app.decision = detail.decision;
-      app.decision_date = detail.decision_date;
-      app.appeal_decision = detail.appeal_decision;
-      app.appeal_date = detail.appeal_date;
+      // Prefer detail-page values where available; fall back to what the
+      // results table already gave us (e.g. decision_date from col 5).
+      app.decision        = detail.decision        ?? app.decision;
+      app.decision_date   = detail.decision_date   ?? app.decision_date;
+      app.appeal_decision = detail.appeal_decision ?? app.appeal_decision;
+      app.appeal_date     = detail.appeal_date     ?? app.appeal_date;
     }
 
     console.log(`[Wealden] Found ${all.length} applications`);
