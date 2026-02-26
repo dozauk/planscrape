@@ -259,7 +259,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
       app.decision_date = detail.decision_date;
       app.appeal_decision = detail.appeal_decision;
       app.appeal_date = detail.appeal_date;
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(2000);
     }
 
     console.log(`[${council}] Found ${all.length} applications`);
