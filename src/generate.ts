@@ -126,6 +126,105 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       return '<span class="pri-badge pri-' + val + '">' + label + '</span>';
     }
 
+    /**
+     * Custom checkbox-dropdown header filter.
+     * entries: [{value, label}, ...]
+     * Attaches dropdown to document.body (fixed positioning) to escape
+     * Tabulator's overflow:hidden header cells.
+     */
+    function makeMultiCheckFilter(entries) {
+      return function(cell, onRendered, success) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative;width:100%;';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.style.cssText = 'width:100%;text-align:left;padding:2px 6px;font-size:11px;' +
+          'border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;' +
+          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#374151;';
+        btn.textContent = 'All';
+        wrap.appendChild(btn);
+
+        const drop = document.createElement('div');
+        drop.style.cssText = 'display:none;position:fixed;z-index:9999;background:#fff;' +
+          'border:1px solid #d1d5db;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);' +
+          'min-width:140px;padding:4px 0;';
+        document.body.appendChild(drop);
+
+        const checkboxes = [];
+        entries.forEach(function(e) {
+          const row = document.createElement('label');
+          row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:5px 10px;' +
+            'cursor:pointer;font-size:12px;user-select:none;white-space:nowrap;';
+
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = e.value;
+          cb.style.cssText = 'width:13px;height:13px;cursor:pointer;accent-color:#6366f1;flex-shrink:0;';
+          cb.addEventListener('change', function() {
+            const checked = checkboxes.filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+            btn.textContent = checked.length
+              ? entries.filter(function(en){ return checked.includes(en.value); }).map(function(en){ return en.label; }).join(', ')
+              : 'All';
+            success(checked);
+          });
+
+          row.addEventListener('mouseenter', function(){ row.style.background = '#f5f3ff'; });
+          row.addEventListener('mouseleave', function(){ row.style.background = ''; });
+          row.appendChild(cb);
+          row.appendChild(document.createTextNode(e.label));
+          drop.appendChild(row);
+          checkboxes.push(cb);
+        });
+
+        let open = false;
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          open = !open;
+          if (open) {
+            const rect = btn.getBoundingClientRect();
+            drop.style.top  = (rect.bottom + 2) + 'px';
+            drop.style.left = rect.left + 'px';
+            drop.style.display = 'block';
+          } else {
+            drop.style.display = 'none';
+          }
+        });
+
+        document.addEventListener('click', function(e) {
+          if (open && !wrap.contains(e.target) && !drop.contains(e.target)) {
+            open = false;
+            drop.style.display = 'none';
+          }
+        });
+
+        return wrap;
+      };
+    }
+
+    // Build dynamic entries for Decision / Appeal from the loaded data
+    function colEntries(field) {
+      return [...new Set(DATA.map(function(d){ return d[field]; }).filter(Boolean))].sort()
+        .map(function(v){ return {value: v, label: v}; });
+    }
+
+    const PRIORITY_ENTRIES = [
+      {value:'high',   label:'High'},
+      {value:'medium', label:'Medium'},
+      {value:'low',    label:'Low'},
+      {value:'none',   label:'None'},
+    ];
+    const COUNCIL_ENTRIES = [
+      {value:'TW',        label:'TW'},
+      {value:'Sevenoaks', label:'Sevenoaks'},
+      {value:'Wealden',   label:'Wealden'},
+    ];
+
+    // Shared filter func: empty selection = show all; else must be in selection
+    function multiFilterFunc(headerVal, rowVal) {
+      return !Array.isArray(headerVal) || headerVal.length === 0 || headerVal.includes(rowVal);
+    }
+
     const table = new Tabulator('#table', {
       data: DATA,
       layout: 'fitColumns',
@@ -136,13 +235,10 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       initialSort: [{ column: 'decision_date', dir: 'desc' }],
       columns: [
         {
-          title: 'Priority', field: 'priority', widthGrow: 0.6, minWidth: 75,
-          headerFilter: 'list',
-          headerFilterParams: {
-            values: { high: 'High', medium: 'Medium', low: 'Low', none: 'None' },
-            clearable: true, multiselect: true,
-          },
-          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
+          title: 'Priority', field: 'priority', widthGrow: 0.6, minWidth: 85,
+          headerFilter: makeMultiCheckFilter(PRIORITY_ENTRIES),
+          headerFilterFunc: multiFilterFunc,
+          headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => priorityBadge(cell.getValue()),
           tooltip: (e, cell) => cell.getData().priority_reason || '',
           sorter: (a, b) => {
@@ -152,12 +248,9 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         },
         {
           title: 'Council', field: 'council', widthGrow: 0.7, minWidth: 80,
-          headerFilter: 'list',
-          headerFilterParams: {
-            values: { TW: 'TW', Sevenoaks: 'Sevenoaks', Wealden: 'Wealden' },
-            clearable: true, multiselect: true,
-          },
-          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
+          headerFilter: makeMultiCheckFilter(COUNCIL_ENTRIES),
+          headerFilterFunc: multiFilterFunc,
+          headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => '<span class="' + councilClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
@@ -172,9 +265,9 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         { title: 'Validated',   field: 'datevalidated', widthGrow: 0.7, minWidth: 85, sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' } },
         {
           title: 'Decision', field: 'decision', widthGrow: 1.0, minWidth: 100,
-          headerFilter: 'list',
-          headerFilterParams: { valuesLookup: true, clearable: true, multiselect: true },
-          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
+          headerFilter: makeMultiCheckFilter(colEntries('decision')),
+          headerFilterFunc: multiFilterFunc,
+          headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
@@ -183,9 +276,9 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         },
         {
           title: 'Appeal', field: 'appeal_decision', widthGrow: 0.9, minWidth: 85,
-          headerFilter: 'list',
-          headerFilterParams: { valuesLookup: true, clearable: true, multiselect: true },
-          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
+          headerFilter: makeMultiCheckFilter(colEntries('appeal_decision')),
+          headerFilterFunc: multiFilterFunc,
+          headerFilterEmptyCheck: (v) => !Array.isArray(v) || v.length === 0,
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
