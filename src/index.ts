@@ -1,20 +1,16 @@
 import 'dotenv/config';
 import { chromium } from 'playwright';
-import { format, subDays } from 'date-fns';
 import { scrapeIdox } from './scrapers/idox';
 import { scrapeWealden } from './scrapers/wealden';
-import { sendDigest } from './email';
-import { Application } from './types';
+import { openDb, upsertApplications, logScrapeRun } from './db';
+import { generateHtml } from './generate';
 
-const DAYS_BACK = 7;
+const DAYS_BACK = 14;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 20_000;
+const DB_PATH = 'planscrape.db';
+const WEB_OUTPUT = 'web-output';
 
-/**
- * Run fn up to `attempts` times, waiting `delayMs` between failures.
- * Calls onRetry (if provided) before each retry — used to restart the browser.
- * Logs each attempt. Throws the last error if all attempts fail.
- */
 async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
@@ -41,19 +37,11 @@ async function withRetry<T>(
 }
 
 async function main(): Promise<void> {
-  const today = new Date();
-  const from = subDays(today, DAYS_BACK);
-  const periodLabel = `${format(from, 'dd MMM yyyy')} – ${format(today, 'dd MMM yyyy')}`;
-
-  console.log(`\nPlanning digest scrape — ${periodLabel}\n`);
+  const db = openDb(DB_PATH);
 
   let browser = await chromium.launch({ headless: true });
-  const applications: Application[] = [];
   const errors: { council: string; message: string }[] = [];
 
-  // Closes the current browser and launches a fresh one before each retry.
-  // The scraper closures below capture `browser` by reference so they
-  // automatically pick up the new instance.
   const restartBrowser = async () => {
     await browser.close().catch(() => {});
     browser = await chromium.launch({ headless: true });
@@ -66,9 +54,11 @@ async function main(): Promise<void> {
         () => scrapeIdox(browser, { council: 'TW', baseUrl: 'https://twbcpa.midkent.gov.uk/online-applications' }, DAYS_BACK),
         restartBrowser,
       );
+      upsertApplications(db, tw);
+      logScrapeRun(db, 'TW', true, tw.length, null);
       if (tw.length === 0) console.warn('[TW] Warning: scraper returned 0 results');
-      applications.push(...tw);
     } catch (err) {
+      logScrapeRun(db, 'TW', false, null, String(err));
       console.error(`[TW] Failed after ${RETRY_ATTEMPTS} attempts:`, err);
       errors.push({ council: 'TW', message: String(err) });
     }
@@ -79,9 +69,11 @@ async function main(): Promise<void> {
         () => scrapeIdox(browser, { council: 'Sevenoaks', baseUrl: 'https://pa.sevenoaks.gov.uk/online-applications' }, DAYS_BACK),
         restartBrowser,
       );
+      upsertApplications(db, sev);
+      logScrapeRun(db, 'Sevenoaks', true, sev.length, null);
       if (sev.length === 0) console.warn('[Sevenoaks] Warning: scraper returned 0 results');
-      applications.push(...sev);
     } catch (err) {
+      logScrapeRun(db, 'Sevenoaks', false, null, String(err));
       console.error(`[Sevenoaks] Failed after ${RETRY_ATTEMPTS} attempts:`, err);
       errors.push({ council: 'Sevenoaks', message: String(err) });
     }
@@ -92,36 +84,23 @@ async function main(): Promise<void> {
         () => scrapeWealden(browser, DAYS_BACK),
         restartBrowser,
       );
+      upsertApplications(db, wea);
+      logScrapeRun(db, 'Wealden', true, wea.length, null);
       if (wea.length === 0) console.warn('[Wealden] Warning: scraper returned 0 results');
-      applications.push(...wea);
     } catch (err) {
+      logScrapeRun(db, 'Wealden', false, null, String(err));
       console.error(`[Wealden] Failed after ${RETRY_ATTEMPTS} attempts:`, err);
       errors.push({ council: 'Wealden', message: String(err) });
     }
 
   } finally {
     await browser.close();
+    db.close();
   }
 
-  // Output JSON
-  const output = { applications };
-  console.log('\n--- JSON OUTPUT ---');
-  console.log(JSON.stringify(output, null, 2));
-  console.log(`--- Total: ${applications.length} applications ---\n`);
+  // Generate static web page
+  generateHtml(DB_PATH, WEB_OUTPUT);
 
-  // Send email if configured
-  const apiKey = process.env.RESEND_API_KEY;
-  const emailTo = process.env.EMAIL_TO?.split(',').map((s) => s.trim()).filter(Boolean);
-  const emailFrom = process.env.EMAIL_FROM ?? 'onboarding@resend.dev';
-
-  if (apiKey && emailTo) {
-    console.log(`Sending digest to ${emailTo}...`);
-    await sendDigest(applications, emailTo, emailFrom, periodLabel, apiKey, errors);
-  } else {
-    console.log('No RESEND_API_KEY / EMAIL_TO set — skipping email send.');
-  }
-
-  // Non-zero exit triggers GitHub Actions failure notification
   if (errors.length > 0) {
     console.error(`\n${errors.length} scraper(s) failed — exiting with error so CI notifies you.`);
     process.exit(1);
