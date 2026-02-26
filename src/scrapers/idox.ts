@@ -94,30 +94,43 @@ interface DetailData {
 /**
  * Visit an Idox application detail page and extract decision + appeal fields.
  * Reads all #simpleDetailsTable rows in one evaluate() call to avoid stale DOM.
+ * Retries once on HTTP 429 with a longer backoff before giving up.
  */
 async function fetchDetail(page: Page, url: string): Promise<DetailData> {
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    const raw = await page.evaluate(() => {
-      const rows: Record<string, string> = {};
-      document.querySelectorAll('#simpleDetailsTable th[scope="row"]').forEach((th) => {
-        const key = th.textContent?.trim() ?? '';
-        const val = th.closest('tr')?.querySelector('td')?.textContent?.trim() ?? '';
-        if (key && val && val !== 'Not Available') rows[key] = val;
+  const RETRY_DELAY_MS = 15_000;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      if (resp?.status() === 429) {
+        if (attempt < 2) {
+          console.log(`  429 on detail page — waiting ${RETRY_DELAY_MS / 1000}s before retry`);
+          await page.waitForTimeout(RETRY_DELAY_MS);
+          continue;
+        }
+        return {};
+      }
+      const raw = await page.evaluate(() => {
+        const rows: Record<string, string> = {};
+        document.querySelectorAll('#simpleDetailsTable th[scope="row"]').forEach((th) => {
+          const key = th.textContent?.trim() ?? '';
+          const val = th.closest('tr')?.querySelector('td')?.textContent?.trim() ?? '';
+          if (key && val && val !== 'Not Available') rows[key] = val;
+        });
+        return rows;
       });
-      return rows;
-    });
-    return {
-      decision: raw['Decision'] || undefined,
-      decision_date: parseIdoxDate(
-        raw['Decision Issued Date'] ?? raw['Decision Date'] ?? raw['Date Decision Issued'] ?? '',
-      ),
-      appeal_decision: raw['Appeal Decision'] || undefined,
-      appeal_date: parseIdoxDate(raw['Appeal Decision Date'] ?? ''),
-    };
-  } catch {
-    return {};
+      return {
+        decision: raw['Decision'] || undefined,
+        decision_date: parseIdoxDate(
+          raw['Decision Issued Date'] ?? raw['Decision Date'] ?? raw['Date Decision Issued'] ?? '',
+        ),
+        appeal_decision: raw['Appeal Decision'] || undefined,
+        appeal_date: parseIdoxDate(raw['Appeal Decision Date'] ?? ''),
+      };
+    } catch {
+      return {};
+    }
   }
+  return {};
 }
 
 /**
@@ -259,7 +272,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
       app.decision_date = detail.decision_date;
       app.appeal_decision = detail.appeal_decision;
       app.appeal_date = detail.appeal_date;
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
     }
 
     console.log(`[${council}] Found ${all.length} applications`);

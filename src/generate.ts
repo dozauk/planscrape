@@ -138,7 +138,11 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         {
           title: 'Priority', field: 'priority', widthGrow: 0.6, minWidth: 75,
           headerFilter: 'list',
-          headerFilterParams: { values: { '': 'All', high: 'High', medium: 'Medium', low: 'Low', none: 'None' }, clearable: true },
+          headerFilterParams: {
+            values: { high: 'High', medium: 'Medium', low: 'Low', none: 'None' },
+            clearable: true, multiselect: true,
+          },
+          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
           formatter: (cell) => priorityBadge(cell.getValue()),
           tooltip: (e, cell) => cell.getData().priority_reason || '',
           sorter: (a, b) => {
@@ -149,7 +153,11 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         {
           title: 'Council', field: 'council', widthGrow: 0.7, minWidth: 80,
           headerFilter: 'list',
-          headerFilterParams: { values: { '': 'All', TW: 'TW', Sevenoaks: 'Sevenoaks', Wealden: 'Wealden' }, clearable: true },
+          headerFilterParams: {
+            values: { TW: 'TW', Sevenoaks: 'Sevenoaks', Wealden: 'Wealden' },
+            clearable: true, multiselect: true,
+          },
+          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
           formatter: (cell) => '<span class="' + councilClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
@@ -165,7 +173,8 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         {
           title: 'Decision', field: 'decision', widthGrow: 1.0, minWidth: 100,
           headerFilter: 'list',
-          headerFilterParams: { valuesLookup: true, clearable: true },
+          headerFilterParams: { valuesLookup: true, clearable: true, multiselect: true },
+          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
@@ -175,7 +184,8 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         {
           title: 'Appeal', field: 'appeal_decision', widthGrow: 0.9, minWidth: 85,
           headerFilter: 'list',
-          headerFilterParams: { valuesLookup: true, clearable: true },
+          headerFilterParams: { valuesLookup: true, clearable: true, multiselect: true },
+          headerFilterFunc: (headerVal, rowVal) => !headerVal.length || headerVal.includes(rowVal),
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {

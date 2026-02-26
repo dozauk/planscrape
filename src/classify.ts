@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { readFileSync } from 'fs';
 
 export type Priority = 'high' | 'medium' | 'low' | 'none';
 
@@ -8,11 +9,27 @@ export interface ClassifyResult {
 }
 
 /**
- * Returns true if both ANTHROPIC_API_KEY and CLASSIFICATION_PROMPT are set.
+ * Load the classification prompt from CLASSIFICATION_PROMPT_FILE (local dev)
+ * or CLASSIFICATION_PROMPT (GitHub Actions secret). Returns undefined if neither is set.
+ */
+function loadPrompt(): string | undefined {
+  const filePath = process.env.CLASSIFICATION_PROMPT_FILE;
+  if (filePath) {
+    try {
+      return readFileSync(filePath, 'utf8');
+    } catch (err) {
+      console.warn(`[classify] Could not read CLASSIFICATION_PROMPT_FILE (${filePath}): ${err}`);
+    }
+  }
+  return process.env.CLASSIFICATION_PROMPT || undefined;
+}
+
+/**
+ * Returns true if ANTHROPIC_API_KEY and a prompt source are configured.
  * Used to gate classification-dependent behaviour (digest filtering, etc.).
  */
 export function isClassificationEnabled(): boolean {
-  return !!(process.env.ANTHROPIC_API_KEY && process.env.CLASSIFICATION_PROMPT);
+  return !!(process.env.ANTHROPIC_API_KEY && loadPrompt());
 }
 
 /**
@@ -27,7 +44,7 @@ export async function classifyApplication(
   description: string,
 ): Promise<ClassifyResult | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const promptTemplate = process.env.CLASSIFICATION_PROMPT;
+  const promptTemplate = loadPrompt();
 
   if (!apiKey || !promptTemplate) return null;
 
