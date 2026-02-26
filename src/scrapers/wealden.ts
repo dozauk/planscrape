@@ -2,6 +2,7 @@ import { Browser, Page } from 'playwright';
 import { format, subDays, parse } from 'date-fns';
 import { Application } from '../types';
 import { attachDiagnosticListeners, saveDebugSnapshot } from '../debug';
+import { DecidedApp } from '../db';
 
 const BASE_URL = 'https://planning.wealden.gov.uk';
 const MAX_PAGES = 20;
@@ -112,11 +113,19 @@ async function fetchDetail(page: Page, url: string): Promise<DetailData> {
   }
 }
 
-export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<Application[]> {
+export async function scrapeWealden(
+  browser: Browser,
+  daysBack = 7,
+  knownDecisions?: Map<string, DecidedApp>,
+): Promise<Application[]> {
   const today = new Date();
   const from = subDays(today, daysBack);
 
   console.log('[Wealden] Starting scrape');
+  console.log(`[Wealden] Searching decision dates ${format(from, 'yyyy-MM-dd')} – ${format(today, 'yyyy-MM-dd')} (${daysBack} days)`);
+  if (knownDecisions) {
+    console.log(`[Wealden] DB cache: ${knownDecisions.size} already-decided application(s) — detail pages skipped for these`);
+  }
   const page = await browser.newPage();
   attachDiagnosticListeners(page, 'Wealden');
 
@@ -203,9 +212,20 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
       pageNum++;
     }
 
-    // Fetch decision + appeal fields from each application's detail page
-    console.log(`[Wealden] Fetching details from ${all.length} detail pages`);
-    for (const app of all) {
+    // Populate decisions: use DB cache where available, only hit detail pages for new apps.
+    const needsDetail = all.filter((a) => !knownDecisions?.has(a.applreference));
+    const fromCache   = all.filter((a) =>  knownDecisions?.has(a.applreference));
+
+    for (const app of fromCache) {
+      const k = knownDecisions!.get(app.applreference)!;
+      app.decision        = k.decision;
+      app.decision_date   = k.decision_date   ?? undefined;
+      app.appeal_decision = k.appeal_decision ?? undefined;
+      app.appeal_date     = k.appeal_date     ?? undefined;
+    }
+
+    console.log(`[Wealden] Detail pages: ${needsDetail.length} to fetch, ${fromCache.length} served from DB cache`);
+    for (const app of needsDetail) {
       const detail = await fetchDetail(page, app.detailsurl);
       // Prefer detail-page values where available; fall back to what the
       // results table already gave us (e.g. decision_date from col 5).

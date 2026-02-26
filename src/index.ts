@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import { scrapeIdox } from './scrapers/idox';
 import { scrapeWealden } from './scrapers/wealden';
-import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, updatePriority } from './db';
+import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, updatePriority, getDecidedApplications, getScrapeStatus } from './db';
 import { generateHtml } from './generate';
 import { isClassificationEnabled, classifyApplication } from './classify';
 
@@ -64,6 +64,13 @@ async function classifyNew(db: ReturnType<typeof openDb>): Promise<void> {
 async function main(): Promise<void> {
   const db = openDb(DB_PATH);
 
+  // Log last scrape times so it's clear what the DB state is going in
+  const statuses = getScrapeStatus(db);
+  for (const s of statuses) {
+    const last = s.last_success ? new Date(s.last_success).toISOString() : 'never';
+    console.log(`[${s.council}] Last successful scrape: ${last}`);
+  }
+
   let browser = await chromium.launch({ headless: true });
   const errors: { council: string; message: string }[] = [];
 
@@ -75,8 +82,9 @@ async function main(): Promise<void> {
   try {
     // Tunbridge Wells
     try {
+      const twDecided = getDecidedApplications(db, 'TW');
       const tw = await withRetry('TW',
-        () => scrapeIdox(browser, { council: 'TW', baseUrl: 'https://twbcpa.midkent.gov.uk/online-applications' }, DAYS_BACK),
+        () => scrapeIdox(browser, { council: 'TW', baseUrl: 'https://twbcpa.midkent.gov.uk/online-applications' }, DAYS_BACK, twDecided),
         restartBrowser,
       );
       upsertApplications(db, tw);
@@ -90,8 +98,9 @@ async function main(): Promise<void> {
 
     // Sevenoaks
     try {
+      const sevDecided = getDecidedApplications(db, 'Sevenoaks');
       const sev = await withRetry('Sevenoaks',
-        () => scrapeIdox(browser, { council: 'Sevenoaks', baseUrl: 'https://pa.sevenoaks.gov.uk/online-applications' }, DAYS_BACK),
+        () => scrapeIdox(browser, { council: 'Sevenoaks', baseUrl: 'https://pa.sevenoaks.gov.uk/online-applications' }, DAYS_BACK, sevDecided),
         restartBrowser,
       );
       upsertApplications(db, sev);
@@ -105,8 +114,9 @@ async function main(): Promise<void> {
 
     // Wealden
     try {
+      const weaDecided = getDecidedApplications(db, 'Wealden');
       const wea = await withRetry('Wealden',
-        () => scrapeWealden(browser, DAYS_BACK),
+        () => scrapeWealden(browser, DAYS_BACK, weaDecided),
         restartBrowser,
       );
       upsertApplications(db, wea);

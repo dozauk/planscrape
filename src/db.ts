@@ -169,6 +169,30 @@ export function getApplicationsForDigest(
   `).all(cutoffStr, cutoffStr) as Application[];
 }
 
+export interface DecidedApp {
+  decision: string;
+  decision_date?: string | null;
+  appeal_decision?: string | null;
+  appeal_date?: string | null;
+}
+
+/**
+ * Return a map of applreference → decision data for every application in this
+ * council that already has a decision recorded in the DB.
+ * Used by scrapers to skip unnecessary detail-page fetches on repeat runs.
+ */
+export function getDecidedApplications(
+  db: Database.Database,
+  council: string,
+): Map<string, DecidedApp> {
+  const rows = db.prepare(`
+    SELECT applreference, decision, decision_date, appeal_decision, appeal_date
+    FROM applications
+    WHERE council = ? AND decision IS NOT NULL
+  `).all(council) as Array<{ applreference: string } & DecidedApp>;
+  return new Map(rows.map((r) => [r.applreference, r]));
+}
+
 /** Return applications that have not yet been classified (priority IS NULL). */
 export function getUnclassifiedApplications(
   db: Database.Database,
