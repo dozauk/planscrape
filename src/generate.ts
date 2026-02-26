@@ -116,7 +116,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
 
     const table = new Tabulator('#table', {
       data: DATA,
-      layout: 'fitData',
+      layout: 'fitColumns',
       pagination: true,
       paginationSize: 50,
       paginationSizeSelector: [25, 50, 100, true],
@@ -124,39 +124,39 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       initialSort: [{ column: 'decision_date', dir: 'desc' }],
       columns: [
         {
-          title: 'Council', field: 'council', width: 110, frozen: true,
+          title: 'Council', field: 'council', widthGrow: 0.7, minWidth: 80,
           headerFilter: 'list',
           headerFilterParams: { values: { '': 'All', TW: 'TW', Sevenoaks: 'Sevenoaks', Wealden: 'Wealden' }, clearable: true },
           formatter: (cell) => '<span class="' + councilClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
-          title: 'Reference', field: 'applreference', width: 165, frozen: true,
+          title: 'Reference', field: 'applreference', widthGrow: 1.2, minWidth: 140,
           formatter: (cell) => {
             const url = cell.getData().detailsurl;
             return '<a href="' + url + '" target="_blank" style="color:#1a56db;text-decoration:none;">' + cell.getValue() + '</a>';
           },
         },
-        { title: 'Address',     field: 'address',     widthGrow: 2, formatter: 'textarea' },
-        { title: 'Description', field: 'description', widthGrow: 3, formatter: 'textarea' },
-        { title: 'Validated',   field: 'datevalidated', width: 105, sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' } },
+        { title: 'Address',     field: 'address',     widthGrow: 1.6, minWidth: 120, formatter: 'textarea' },
+        { title: 'Description', field: 'description', widthGrow: 3.0, minWidth: 160, formatter: 'textarea' },
+        { title: 'Validated',   field: 'datevalidated', widthGrow: 0.7, minWidth: 85, sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' } },
         {
-          title: 'Decision', field: 'decision', widthGrow: 1,
+          title: 'Decision', field: 'decision', widthGrow: 1.0, minWidth: 100,
           headerFilter: 'list',
           headerFilterParams: { valuesLookup: true, clearable: true },
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
-          title: 'Decision Date', field: 'decision_date', width: 120,
+          title: 'Dec. Date', field: 'decision_date', widthGrow: 0.7, minWidth: 85,
           sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' },
         },
         {
-          title: 'Appeal', field: 'appeal_decision', width: 120,
+          title: 'Appeal', field: 'appeal_decision', widthGrow: 0.9, minWidth: 85,
           headerFilter: 'list',
           headerFilterParams: { valuesLookup: true, clearable: true },
           formatter: (cell) => '<span class="' + decisionClass(cell.getValue()) + '">' + (cell.getValue() || '') + '</span>',
         },
         {
-          title: 'Appeal Date', field: 'appeal_date', width: 110,
+          title: 'App. Date', field: 'appeal_date', widthGrow: 0.7, minWidth: 85,
           sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' },
         },
       ],
