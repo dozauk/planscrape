@@ -5,3 +5,4 @@ dist/
 debug/
 web-output/
 *.db
+prompt.txt
