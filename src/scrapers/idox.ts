@@ -250,7 +250,8 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
       all.push(...results);
     }
 
-    // Fetch decision + appeal fields from each application's detail page
+    // Fetch decision + appeal fields from each application's detail page.
+    // Small delay between requests to avoid 429 rate-limiting on some portals.
     console.log(`[${council}] Fetching details from ${all.length} detail pages`);
     for (const app of all) {
       const detail = await fetchDetail(page, app.detailsurl);
@@ -258,6 +259,7 @@ export async function scrapeIdox(browser: Browser, config: IdoxConfig, daysBack 
       app.decision_date = detail.decision_date;
       app.appeal_decision = detail.appeal_decision;
       app.appeal_date = detail.appeal_date;
+      await page.waitForTimeout(1500);
     }
 
     console.log(`[${council}] Found ${all.length} applications`);

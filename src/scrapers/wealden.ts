@@ -176,14 +176,26 @@ export async function scrapeWealden(browser: Browser, daysBack = 7): Promise<App
       const pageResults = await parseResultsPage(page);
       all.push(...pageResults);
 
-      // Pagination uses AJAX — look for "Next Page." link
+      // Pagination: the "Next Page" link uses AJAX and its DOM node is replaced
+      // by the server before Playwright can click it (detached from DOM error).
+      // Fix: fire the click via JS (no stability wait), then wait for the AJAX
+      // response before reading the updated table.
+      // Direct page.goto() doesn't work — Wealden requires server-side session.
       const nextLink = page.locator('ul.ajax-pager a[aria-label="Next Page."]');
       if (await nextLink.count() === 0) break;
 
-      await nextLink.click();
-      // Wait for AJAX to complete and update the results container
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
-      // Confirm table is still present after AJAX update
+      await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes('/Search/ResultsPage') && r.status() < 400,
+          { timeout: 15000 },
+        ),
+        page.evaluate(() => {
+          const el = document.querySelector(
+            'ul.ajax-pager a[aria-label="Next Page."]',
+          ) as HTMLAnchorElement | null;
+          el?.click();
+        }),
+      ]);
       await page.waitForSelector('table.tblResults tbody tr', { timeout: 10000 });
       pageNum++;
     }
