@@ -80,7 +80,7 @@ function buildCouncilTable(apps: Application[]): string {
       </td>
       <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(a.address)}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(a.description)}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${escapeHtml(a.datevalidated ?? a.datereceived ?? '')}</td>
+      <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${escapeHtml(a.decision_date ?? '')}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;">${priorityBadge(a.priority)}</td>
       <td style="padding:6px 8px;border:1px solid #ddd;${decisionStyle(a.decision)}">${escapeHtml(a.decision ?? '')}</td>
     </tr>`
@@ -94,7 +94,7 @@ function buildCouncilTable(apps: Application[]): string {
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Reference</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Address</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Description</th>
-        <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Validated</th>
+        <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Decision Date</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Priority</th>
         <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Decision</th>
       </tr>
@@ -247,7 +247,7 @@ export function buildText(applications: Application[], opts: DigestOptions): str
         lines.push(`  ${a.address}`);
         lines.push(`  ${a.description}`);
         if (a.priority_reason) lines.push(`  → ${a.priority_reason}`);
-        if (a.datevalidated) lines.push(`  Validated: ${a.datevalidated}`);
+        if (a.decision_date) lines.push(`  Decided: ${a.decision_date}`);
         if (a.decision) lines.push(`  Decision: ${a.decision}`);
         lines.push(`  ${a.detailsurl}`);
         lines.push('');
