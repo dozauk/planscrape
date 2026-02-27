@@ -15,9 +15,6 @@ jobs:
   scrape:
     runs-on: self-hosted
     timeout-minutes: 45
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Download source
@@ -81,13 +78,16 @@ jobs:
           if-no-files-found: ignore
 
       - name: Setup Pages
+        if: github.ref == 'refs/heads/master'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v3
         with:
           path: web-output/
 
       - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/master'
         id: deploy
         uses: actions/deploy-pages@v4

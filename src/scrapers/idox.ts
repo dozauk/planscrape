@@ -1,5 +1,5 @@
 import { Browser, Page } from 'playwright';
-import { format, subDays, parse } from 'date-fns';
+import { format, parse } from 'date-fns';
 import { Application, CouncilId } from '../types';
 import { attachDiagnosticListeners, saveDebugSnapshot } from '../debug';
 import { DecidedApp } from '../db';
@@ -10,10 +10,26 @@ export interface IdoxConfig {
 }
 
 const MAX_PAGES = 20;
-const CASE_TYPES = ['Full Application', 'Permission in Principle'];
 
-function formatDate(d: Date): string {
-  return format(d, 'dd/MM/yyyy');
+/**
+ * Application type suffixes to include.
+ * Idox uses codes appended to reference numbers e.g. 26/00419/FULL, 26/00105/PRIOR.
+ * TW and Sevenoaks use different abbreviations for the same types (e.g. FULL vs FUL).
+ * Excluded: TPO/TCA (trees), ADV/WTPO (advertisements/trees), NMA (non-material amendment),
+ * HOUSE (householder minor works), LDCE/LDCP/LDCPR (lawful development), DETAIL (discharge of conditions).
+ */
+const INCLUDED_SUFFIXES = new Set([
+  // TW codes
+  'FULL', 'PRIOR', 'OUT', 'REM', 'MAJ', 'LBC', 'CAC', 'PIP',
+  // Sevenoaks codes (Idox instance with different abbreviations)
+  'FUL',  // full application (TW uses FULL)
+  'PAC',  // prior approval commercial-to-resi
+  'PAD',  // prior approval dwellinghouse enlargement
+]);
+
+/** Extract the type suffix from an Idox reference, e.g. "26/00419/FULL" → "FULL" */
+function appTypeSuffix(ref: string): string {
+  return ref.split('/').pop() ?? '';
 }
 
 /**
@@ -23,10 +39,11 @@ function formatDate(d: Date): string {
 function parseIdoxDate(raw: string): string | undefined {
   const s = raw.trim();
   if (!s) return undefined;
+  // "EEE dd MMM yyyy" e.g. "Mon 23 Feb 2026"
   try {
     return format(parse(s, 'EEE dd MMM yyyy', new Date()), 'yyyy-MM-dd');
   } catch { /* fall through */ }
-  // Also handle dd/MM/yyyy just in case
+  // dd/MM/yyyy fallback
   try {
     return format(parse(s, 'dd/MM/yyyy', new Date()), 'yyyy-MM-dd');
   } catch {
@@ -42,7 +59,6 @@ function extractAfter(text: string, label: string): string {
   const idx = text.indexOf(label);
   if (idx === -1) return '';
   const after = text.slice(idx + label.length).trim();
-  // Stop at the next "|" divider
   const pipe = after.indexOf('|');
   return (pipe === -1 ? after : after.slice(0, pipe)).trim();
 }
@@ -94,7 +110,6 @@ interface DetailData {
 
 /**
  * Visit an Idox application detail page and extract decision + appeal fields.
- * Reads all #simpleDetailsTable rows in one evaluate() call to avoid stale DOM.
  * Retries once on HTTP 429 with a longer backoff before giving up.
  */
 async function fetchDetail(page: Page, url: string): Promise<DetailData> {
@@ -135,111 +150,104 @@ async function fetchDetail(page: Page, url: string): Promise<DetailData> {
 }
 
 /**
- * Run one search (one case type) and return all paginated results.
+ * Parse all application items from the current #searchresults page.
  */
-async function runSearch(
+async function parseResultsPage(
   page: Page,
   baseUrl: string,
   council: CouncilId,
-  caseTypeLabel: string,
-  from: Date,
-  today: Date,
 ): Promise<Application[]> {
-  const resp = await page.goto(`${baseUrl}/search.do?action=advanced&searchType=Application`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-  console.log(`[${council}] "${caseTypeLabel}" search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
+  const results: Application[] = [];
+  const items = page.locator('#searchresults li.searchresult');
+  const count = await items.count();
 
-  // Find the exact option label using a case-insensitive match — portals differ in capitalisation
-  // e.g. TW: "Permission in Principle" vs Sevenoaks: "Permission In Principle"
-  const exactLabel = await page.evaluate((label) => {
-    const sel = document.querySelector('select[name="searchCriteria.caseType"]') as HTMLSelectElement | null;
-    if (!sel) return null;
-    const opt = Array.from(sel.options).find((o) => o.text.trim().toLowerCase() === label.toLowerCase());
-    return opt ? opt.text.trim() : null;
-  }, caseTypeLabel);
+  for (let i = 0; i < count; i++) {
+    const item = items.nth(i);
 
-  if (!exactLabel) {
-    console.log(`[${council}] "${caseTypeLabel}": option not available on this portal, skipping`);
-    return [];
+    const summaryLink = item.locator('a.summaryLink');
+    const description = (await summaryLink.locator('.summaryLinkTextClamp').textContent() ?? '').trim()
+      || (await summaryLink.textContent() ?? '').trim();
+
+    const relHref = (await summaryLink.getAttribute('href') ?? '').trim();
+    const detailsurl = relHref.startsWith('http')
+      ? relHref
+      : `${baseUrl.replace(/\/online-applications$/, '')}${relHref}`;
+
+    const address = (await item.locator('p.address').textContent() ?? '').trim();
+    const metaText = (await item.locator('p.metaInfo').textContent() ?? '').trim();
+
+    const applreference = extractAfter(metaText, 'Ref. No:');
+    const receivedRaw   = extractAfter(metaText, 'Received:');
+    const validatedRaw  = extractAfter(metaText, 'Validated:');
+    const status        = extractAfter(metaText, 'Status:') || undefined;
+
+    const datereceived  = parseIdoxDate(receivedRaw);
+    const datevalidated = parseIdoxDate(validatedRaw);
+
+    if (applreference) {
+      results.push({ council, applreference, address, description, datereceived, datevalidated, status, detailsurl });
+    }
   }
 
-  await page.selectOption('select[name="searchCriteria.caseType"]', { label: exactLabel });
+  return results;
+}
 
-  // Fill decision date range (dd/MM/yyyy)
-  await page.fill('input[name="date(applicationDecisionStart)"]', formatDate(from));
-  await page.fill('input[name="date(applicationDecisionEnd)"]', formatDate(today));
+/**
+ * Submit the weekly list form for a given week option value and list type,
+ * then collect all paginated results.
+ */
+async function runWeeklyListSearch(
+  page: Page,
+  baseUrl: string,
+  council: CouncilId,
+  weekValue: string,
+): Promise<Application[]> {
+  const resp = await page.goto(
+    `${baseUrl}/search.do?action=weeklyList&searchType=Application`,
+    { waitUntil: 'domcontentloaded', timeout: 60000 },
+  );
+  console.log(`[${council}] Weekly list page: HTTP ${resp?.status() ?? '?'}  week="${weekValue}"`);
 
-  // Submit and wait for results list, no-results indicator, or single-result detail redirect
+  // Select the requested week
+  await page.selectOption('select[name="week"]', { value: weekValue });
+
+  // Select "Decided in this week" radio
+  await page.locator('input[name="dateType"][value="DC_Decided"]').check();
+
+  // Submit and wait for results list, no-results indicator, or single-result redirect
   await page.click('input[value="Search"], button[type="submit"]');
   await page.waitForSelector('#searchresults, .noResults, .messagebox, #simpleDetailsTable', { timeout: 60000 });
 
-  // Idox redirects directly to the detail page when there is exactly one result
+  // Single-result redirect
   if ((await page.locator('#simpleDetailsTable').count()) > 0 &&
       (await page.locator('#searchresults').count()) === 0) {
-    console.log(`[${council}] "${caseTypeLabel}": single result — extracting from detail page`);
+    console.log(`[${council}] Week "${weekValue}": single result — extracting from detail page`);
     const app = await extractSingleResult(page, council);
     return app ? [app] : [];
+  }
+
+  // No results
+  const noResultsEl = page.locator('.noResults, .messagebox');
+  if (await noResultsEl.count() > 0) {
+    const msg = (await noResultsEl.first().textContent() ?? '').toLowerCase();
+    if (msg.includes('no result') || msg.includes('no match') || msg.includes('0 result')) {
+      console.log(`[${council}] Week "${weekValue}": no results`);
+      return [];
+    }
   }
 
   const results: Application[] = [];
   let pageNum = 1;
 
   while (pageNum <= MAX_PAGES) {
-    // Check for no-results message
-    const noResultsEl = page.locator('.noResults, .messagebox');
-    if (await noResultsEl.count() > 0) {
-      const msg = (await noResultsEl.first().textContent() ?? '').toLowerCase();
-      if (msg.includes('no result') || msg.includes('no match') || msg.includes('0 result')) {
-        console.log(`[${council}] "${caseTypeLabel}": no results`);
-        break;
-      }
-    }
+    console.log(`[${council}] Week "${weekValue}": parsing results page ${pageNum}`);
+    const pageResults = await parseResultsPage(page, baseUrl, council);
+    results.push(...pageResults);
 
-    console.log(`[${council}] "${caseTypeLabel}": parsing results page ${pageNum}`);
-
-    // Results are <li class="searchresult"> inside <ul id="searchresults">
-    const items = page.locator('#searchresults li.searchresult');
-    const count = await items.count();
-
-    for (let i = 0; i < count; i++) {
-      const item = items.nth(i);
-
-      // Description is the link text inside the summary link
-      const summaryLink = item.locator('a.summaryLink');
-      const description = (await summaryLink.locator('.summaryLinkTextClamp').textContent() ?? '').trim()
-        || (await summaryLink.textContent() ?? '').trim();
-
-      // Detail URL
-      const relHref = (await summaryLink.getAttribute('href') ?? '').trim();
-      const detailsurl = relHref.startsWith('http') ? relHref : `${baseUrl.replace(/\/online-applications$/, '')}${relHref}`;
-
-      // Address
-      const address = (await item.locator('p.address').textContent() ?? '').trim();
-
-      // Reference and dates are in p.metaInfo
-      const metaText = (await item.locator('p.metaInfo').textContent() ?? '').trim();
-
-      const applreference = extractAfter(metaText, 'Ref. No:');
-      const receivedRaw = extractAfter(metaText, 'Received:');
-      const validatedRaw = extractAfter(metaText, 'Validated:');
-      const status = extractAfter(metaText, 'Status:') || undefined;
-
-      const datereceived = parseIdoxDate(receivedRaw);
-      const datevalidated = parseIdoxDate(validatedRaw);
-
-      if (applreference) {
-        results.push({ council, applreference, address, description, datereceived, datevalidated, status, detailsurl });
-      }
-    }
-
-    // Pagination — Idox uses <a class="next">
     const nextLink = page.locator('a.next').first();
     if (await nextLink.count() === 0) break;
 
     await nextLink.click();
-    // Wait for the results list to reload
     await page.waitForSelector('#searchresults li.searchresult', { timeout: 30000 });
     pageNum++;
   }
@@ -250,32 +258,64 @@ async function runSearch(
 export async function scrapeIdox(
   browser: Browser,
   config: IdoxConfig,
-  daysBack = 7,
+  daysBack = 14,
   knownDecisions?: Map<string, DecidedApp>,
 ): Promise<Application[]> {
   const { council, baseUrl } = config;
   const today = new Date();
-  const from = subDays(today, daysBack);
 
-  console.log(`[${council}] Starting Idox scrape on ${baseUrl}`);
-  console.log(`[${council}] Searching decision dates ${format(from, 'yyyy-MM-dd')} – ${format(today, 'yyyy-MM-dd')} (${daysBack} days)`);
+  console.log(`[${council}] Starting Idox scrape (weekly-list strategy) on ${baseUrl}`);
+  console.log(`[${council}] Searching decision dates ~ last ${daysBack} days`);
+  console.log(`[${council}] Included types: ${[...INCLUDED_SUFFIXES].join(', ')}`);
   if (knownDecisions) {
     console.log(`[${council}] DB cache: ${knownDecisions.size} already-decided application(s) — detail pages skipped for these`);
   }
+
   const page = await browser.newPage();
   attachDiagnosticListeners(page, council);
 
   try {
+    // Determine which weeks to fetch. We always include the current week.
+    // If daysBack > 7, also include the previous week to ensure full coverage
+    // across the weekly boundary (e.g. on a Monday when this week has no decisions yet).
+    await page.goto(
+      `${baseUrl}/search.do?action=weeklyList&searchType=Application`,
+      { waitUntil: 'domcontentloaded', timeout: 60000 },
+    );
+
+    const weekOptions: string[] = await page.evaluate((days) => {
+      const sel = document.querySelector('select[name="week"]') as HTMLSelectElement;
+      if (!sel) return [];
+      const weeksNeeded = Math.ceil(days / 7);
+      return Array.from(sel.options).slice(0, weeksNeeded).map(o => o.value);
+    }, daysBack);
+
+    console.log(`[${council}] Fetching weeks: ${weekOptions.join(', ')}`);
+
+    // Collect results across all required weeks, deduplicating by reference
+    const seen = new Set<string>();
     const all: Application[] = [];
 
-    for (const caseType of CASE_TYPES) {
-      const results = await runSearch(page, baseUrl, council, caseType, from, today);
-      all.push(...results);
+    for (const weekValue of weekOptions) {
+      const weekResults = await runWeeklyListSearch(page, baseUrl, council, weekValue);
+      for (const app of weekResults) {
+        if (!seen.has(app.applreference)) {
+          seen.add(app.applreference);
+          all.push(app);
+        }
+      }
     }
 
-    // Populate decisions: use DB cache where available, only hit detail pages for new apps.
-    const needsDetail = all.filter((a) => !knownDecisions?.has(a.applreference));
-    const fromCache   = all.filter((a) =>  knownDecisions?.has(a.applreference));
+    // Filter to relevant application types
+    const relevant = all.filter((a) => INCLUDED_SUFFIXES.has(appTypeSuffix(a.applreference)));
+    const excluded = all.length - relevant.length;
+    if (excluded > 0) {
+      console.log(`[${council}] Filtered out ${excluded} non-relevant type(s) (TPO, HOUSE, NMA, etc.) — ${relevant.length} remaining`);
+    }
+
+    // Populate decisions: use DB cache where available; only fetch detail pages for new apps.
+    const needsDetail = relevant.filter((a) => !knownDecisions?.has(a.applreference));
+    const fromCache   = relevant.filter((a) =>  knownDecisions?.has(a.applreference));
 
     for (const app of fromCache) {
       const k = knownDecisions!.get(app.applreference)!;
@@ -295,8 +335,8 @@ export async function scrapeIdox(
       await page.waitForTimeout(3000);
     }
 
-    console.log(`[${council}] Found ${all.length} applications`);
-    return all;
+    console.log(`[${council}] Found ${relevant.length} applications (${all.length} total before type filter)`);
+    return relevant;
   } catch (err) {
     await saveDebugSnapshot(page, council, err);
     throw err;
