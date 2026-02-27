@@ -2,11 +2,12 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import { scrapeIdox } from './scrapers/idox';
 import { scrapeWealden } from './scrapers/wealden';
-import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, updatePriority, getDecidedApplications, getScrapeStatus } from './db';
+import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, updatePriority, getDecidedApplications, getScrapeStatus, pruneOldApplications } from './db';
 import { generateHtml } from './generate';
 import { isClassificationEnabled, classifyApplication } from './classify';
 
 const DAYS_BACK = 14;
+const DB_RETENTION_DAYS = 90;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 20_000;
 const DB_PATH = 'planscrape.db';
@@ -63,6 +64,10 @@ async function classifyNew(db: ReturnType<typeof openDb>): Promise<void> {
 
 async function main(): Promise<void> {
   const db = openDb(DB_PATH);
+
+  // Prune applications older than the retention window
+  const pruned = pruneOldApplications(db, DB_RETENTION_DAYS);
+  if (pruned > 0) console.log(`[db] Pruned ${pruned} application(s) older than ${DB_RETENTION_DAYS} days`);
 
   // Log last scrape times so it's clear what the DB state is going in
   const statuses = getScrapeStatus(db);

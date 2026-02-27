@@ -206,6 +206,21 @@ export function getUnclassifiedApplications(
   `).all() as Array<{ council: string; applreference: string; description: string }>;
 }
 
+/**
+ * Delete applications whose decision_date (or first_seen as fallback) is
+ * older than `days` days. Returns the number of rows removed.
+ */
+export function pruneOldApplications(db: Database.Database, days: number): number {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const result = db.prepare(`
+    DELETE FROM applications
+    WHERE COALESCE(decision_date, first_seen) < ?
+  `).run(cutoffStr);
+  return result.changes;
+}
+
 /** Persist the LLM classification result for one application. */
 export function updatePriority(
   db: Database.Database,
