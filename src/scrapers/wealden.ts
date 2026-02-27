@@ -7,8 +7,26 @@ import { DecidedApp } from '../db';
 const BASE_URL = 'https://planning.wealden.gov.uk';
 const MAX_PAGES = 20;
 
-function formatDate(d: Date): string {
-  return format(d, 'dd/MM/yyyy');
+/**
+ * Application type suffixes to include.
+ * Anything not in this set is skipped before AI classification and detail-page fetches.
+ * Excluded examples: CD (condition discharge), AD (advertisement), N04/N56 (prior approval
+ * notifications), TPO (tree preservation), OA (observation from another authority).
+ */
+const INCLUDED_TYPES = new Set(['F', 'PIP', 'MAJ', 'OUT', 'REM', 'LB', 'CON', 'DEM']);
+
+/** Extract the type suffix from a Wealden reference, e.g. "WD/2026/0123/F" → "F" */
+function appTypeSuffix(ref: string): string {
+  return ref.split('/').pop() ?? '';
+}
+
+/**
+ * Build the /Search/Standard URL for a decision date range.
+ * Wealden's weekly list uses MM/DD/YYYY HH:MM:SS (US format), URL-encoded.
+ */
+function buildSearchUrl(from: Date, to: Date): string {
+  const enc = (d: Date) => encodeURIComponent(format(d, 'MM/dd/yyyy') + ' 00:00:00');
+  return `${BASE_URL}/Search/Standard?DateDeterminedFrom=${enc(from)}&DateDeterminedTo=${enc(to)}`;
 }
 
 function parseWealdenDate(raw: string): string | undefined {
@@ -22,8 +40,7 @@ function parseWealdenDate(raw: string): string | undefined {
 }
 
 async function acceptDisclaimer(page: Page): Promise<void> {
-  // Page redirects to /Disclaimer?returnUrl=... — click "Agree" to proceed
-  if (page.url().includes('/Disclaimer')) {
+  if (page.url().toLowerCase().includes('/disclaimer')) {
     console.log('[Wealden] Accepting disclaimer');
     await page.locator('button:has-text("Agree"), input[value="Agree"]').first().click();
     await page.waitForLoadState('domcontentloaded');
@@ -33,14 +50,14 @@ async function acceptDisclaimer(page: Page): Promise<void> {
 async function parseResultsPage(page: Page): Promise<Application[]> {
   // Extract all row data in a single synchronous evaluate() call so that
   // AJAX DOM updates cannot race between individual async locator reads.
-  const rawRows = await page.evaluate((baseUrl) => {
+  const rawRows = await page.evaluate(() => {
     const out: Array<{
       applreference: string;
       relHref: string;
       address: string;
       description: string;
       datevalidatedRaw: string;
-      decisionDateRaw: string;   // col 5 — decision date
+      decisionDateRaw: string;
       statusRaw: string;
     }> = [];
     document.querySelectorAll('table.tblResults tbody tr').forEach((row) => {
@@ -54,15 +71,15 @@ async function parseResultsPage(page: Page): Promise<Application[]> {
       out.push({
         applreference,
         relHref,
-        address: cells[2].textContent?.trim() ?? '',
-        description: cells[3].textContent?.trim() ?? '',
+        address:          cells[2].textContent?.trim() ?? '',
+        description:      cells[3].textContent?.trim() ?? '',
         datevalidatedRaw: cells[4].textContent?.trim() ?? '',
         decisionDateRaw:  cells[5].textContent?.trim() ?? '',
-        statusRaw: cells[6].textContent?.trim() ?? '',
+        statusRaw:        cells[6].textContent?.trim() ?? '',
       });
     });
     return out;
-  }, BASE_URL);
+  });
 
   return rawRows.map(({ applreference, relHref, address, description, datevalidatedRaw, decisionDateRaw, statusRaw }) => ({
     council: 'Wealden' as const,
@@ -83,10 +100,6 @@ interface DetailData {
   appeal_date?: string;
 }
 
-/**
- * Visit a Wealden detail page and extract decision + appeal fields.
- * Returns raw date strings from the browser, then parses them in Node.js.
- */
 async function fetchDetail(page: Page, url: string): Promise<DetailData> {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -102,9 +115,7 @@ async function fetchDetail(page: Page, url: string): Promise<DetailData> {
     const notNA = (v: string | undefined) => (v && v !== 'N/A' ? v : undefined);
     return {
       decision: notNA(raw['Decision']),
-      decision_date: parseWealdenDate(
-        raw['Decision Issued Date'] ?? raw['Decision Date'] ?? '',
-      ),
+      decision_date: parseWealdenDate(raw['Decision Issued Date'] ?? raw['Decision Date'] ?? ''),
       appeal_decision: notNA(raw['Appeal Decision']),
       appeal_date: parseWealdenDate(raw['Appeal Decision Date'] ?? raw['Appeal Date'] ?? ''),
     };
@@ -115,71 +126,45 @@ async function fetchDetail(page: Page, url: string): Promise<DetailData> {
 
 export async function scrapeWealden(
   browser: Browser,
-  daysBack = 7,
+  daysBack = 14,
   knownDecisions?: Map<string, DecidedApp>,
 ): Promise<Application[]> {
   const today = new Date();
   const from = subDays(today, daysBack);
 
-  console.log('[Wealden] Starting scrape');
+  console.log('[Wealden] Starting scrape (weekly-list strategy — all application types)');
   console.log(`[Wealden] Searching decision dates ${format(from, 'yyyy-MM-dd')} – ${format(today, 'yyyy-MM-dd')} (${daysBack} days)`);
+  console.log(`[Wealden] Included types: ${[...INCLUDED_TYPES].join(', ')}`);
   if (knownDecisions) {
     console.log(`[Wealden] DB cache: ${knownDecisions.size} already-decided application(s) — detail pages skipped for these`);
   }
+
   const page = await browser.newPage();
   attachDiagnosticListeners(page, 'Wealden');
 
   try {
-    const resp = await page.goto(`${BASE_URL}/Search/Advanced`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
+    // Navigate directly to the pre-parameterised search URL (same endpoint the weekly
+    // list page uses — no form interaction required).
+    const searchUrl = buildSearchUrl(from, today);
+    const resp = await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     console.log(`[Wealden] Search page: HTTP ${resp?.status() ?? '?'}  url=${page.url()}`);
 
     await acceptDisclaimer(page);
 
-    // Click "Advanced" tab — the Quick tab is active by default
-    const advTab = page.locator('a.tab-button:has-text("Advanced")');
-    if (await advTab.count() > 0) {
-      await advTab.click();
-      // Small wait for tab JS to activate the panel
-      await page.waitForTimeout(300);
-    }
-
-    // Set checkboxes via JS evaluation — they're CSS-hidden (custom styled with ea-triggers-bound)
-    await page.evaluate(() => {
-      const setChecked = (id: string, val: boolean) => {
-        const el = document.getElementById(id) as HTMLInputElement | null;
-        if (el) {
-          el.checked = val;
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      };
-      setChecked('SearchPlanning', true);
-      setChecked('SearchBuildingControl', false);
-      setChecked('SearchEnforcement', false);
-      setChecked('SearchTreePreservationOrders', false);
-    });
-
-    // Application type: Full = "F"
-    await page.locator('#ApplicationType').selectOption({ value: 'F' });
-
-    // Decision date range
-    await page.locator('#DateDeterminedFrom').fill(formatDate(from));
-    await page.locator('#DateDeterminedTo').fill(formatDate(today));
-
-    // Submit using the button inside the #advanced tab pane
-    await page.locator('#advanced button[type="submit"]').click();
-    await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
-
-    // Wait for results table
+    // Wait for results table (or empty state)
     try {
-      await page.waitForSelector('table.tblResults tbody tr', { timeout: 30000 });
+      await page.waitForSelector('table.tblResults tbody tr, .no-results, .messagebox', { timeout: 30000 });
     } catch {
       console.log('[Wealden] No results table found — may be empty');
       return [];
     }
 
+    if (await page.locator('table.tblResults tbody tr').count() === 0) {
+      console.log('[Wealden] Results table empty');
+      return [];
+    }
+
+    // Collect all pages
     const all: Application[] = [];
     let pageNum = 1;
 
@@ -188,11 +173,7 @@ export async function scrapeWealden(
       const pageResults = await parseResultsPage(page);
       all.push(...pageResults);
 
-      // Pagination: the "Next Page" link uses AJAX and its DOM node is replaced
-      // by the server before Playwright can click it (detached from DOM error).
-      // Fix: fire the click via JS (no stability wait), then wait for the AJAX
-      // response before reading the updated table.
-      // Direct page.goto() doesn't work — Wealden requires server-side session.
+      // Pagination: same AJAX pager as the advanced search results.
       const nextLink = page.locator('ul.ajax-pager a[aria-label="Next Page."]');
       if (await nextLink.count() === 0) break;
 
@@ -212,9 +193,16 @@ export async function scrapeWealden(
       pageNum++;
     }
 
-    // Populate decisions: use DB cache where available, only hit detail pages for new apps.
-    const needsDetail = all.filter((a) => !knownDecisions?.has(a.applreference));
-    const fromCache   = all.filter((a) =>  knownDecisions?.has(a.applreference));
+    // Filter to relevant application types before any further processing.
+    const relevant = all.filter((a) => INCLUDED_TYPES.has(appTypeSuffix(a.applreference)));
+    const excluded = all.length - relevant.length;
+    if (excluded > 0) {
+      console.log(`[Wealden] Filtered out ${excluded} non-relevant type(s) (CD, AD, N04, etc.) — ${relevant.length} remaining`);
+    }
+
+    // Populate decisions: use DB cache where available; only fetch detail pages for new apps.
+    const needsDetail = relevant.filter((a) => !knownDecisions?.has(a.applreference));
+    const fromCache   = relevant.filter((a) =>  knownDecisions?.has(a.applreference));
 
     for (const app of fromCache) {
       const k = knownDecisions!.get(app.applreference)!;
@@ -227,16 +215,14 @@ export async function scrapeWealden(
     console.log(`[Wealden] Detail pages: ${needsDetail.length} to fetch, ${fromCache.length} served from DB cache`);
     for (const app of needsDetail) {
       const detail = await fetchDetail(page, app.detailsurl);
-      // Prefer detail-page values where available; fall back to what the
-      // results table already gave us (e.g. decision_date from col 5).
       app.decision        = detail.decision        ?? app.decision;
       app.decision_date   = detail.decision_date   ?? app.decision_date;
       app.appeal_decision = detail.appeal_decision ?? app.appeal_decision;
       app.appeal_date     = detail.appeal_date     ?? app.appeal_date;
     }
 
-    console.log(`[Wealden] Found ${all.length} applications`);
-    return all;
+    console.log(`[Wealden] Found ${relevant.length} applications (${all.length} total before type filter)`);
+    return relevant;
   } catch (err) {
     await saveDebugSnapshot(page, 'Wealden', err);
     throw err;
