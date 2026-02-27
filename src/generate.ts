@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { getRecentApplications, getScrapeStatus } from './db';
 
-const DISPLAY_DAYS = 14;
+const DISPLAY_DAYS = 30;
 
 function buildHtml(appsJson: string, statusJson: string, generatedAt: string): string {
   return `<!DOCTYPE html>
