@@ -47,6 +47,12 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
       color: #6b7280; cursor: pointer;
     }
     #clear-filters:hover { background: #f3f4f6; color: #374151; border-color: #9ca3af; }
+    #export-csv {
+      padding: 5px 12px; font-size: 12px; font-weight: 500;
+      border: 1px solid #d1d5db; border-radius: 6px; background: #fff;
+      color: #374151; cursor: pointer;
+    }
+    #export-csv:hover { background: #f3f4f6; border-color: #9ca3af; }
     #table { background: #fff; border-radius: 8px; overflow: hidden;
              box-shadow: 0 1px 3px rgba(0,0,0,.08); }
     .tabulator { border: none !important; font-size: 13px; }
@@ -83,6 +89,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
     <input id="search" type="text" placeholder="Search reference, address, description…">
     <span class="count" id="count"></span>
     <button id="clear-filters">Clear Filters</button>
+    <button id="export-csv">Export CSV</button>
   </div>
 
   <div id="table"></div>
@@ -316,6 +323,7 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
           title: 'App. Date', field: 'appeal_date', widthGrow: 0.7, minWidth: 85,
           sorter: 'date', sorterParams: { format: 'YYYY-MM-DD' },
         },
+        { title: 'URL', field: 'detailsurl', visible: false, download: true },
       ],
     });
 
@@ -329,6 +337,12 @@ function buildHtml(appsJson: string, statusJson: string, generatedAt: string): s
         { field: 'description',   type: 'like', value: v },
         { field: 'decision',      type: 'like', value: v },
       ]]);
+    });
+
+    // Export CSV button — exports currently filtered rows
+    document.getElementById('export-csv').addEventListener('click', function() {
+      const date = new Date().toISOString().slice(0, 10);
+      table.download('csv', 'planning-applications-' + date + '.csv');
     });
 
     // Clear Filters button — resets search box and all checkbox dropdowns
