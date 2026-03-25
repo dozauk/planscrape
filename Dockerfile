@@ -1,4 +1,4 @@
-FROM myoung34/github-runner:ubuntu-focal
+FROM myoung34/github-runner:latest
 
 # Install Node.js 20 + build tools (python3 + build-essential needed by
 # better-sqlite3 native bindings if no prebuilt binary matches the host)

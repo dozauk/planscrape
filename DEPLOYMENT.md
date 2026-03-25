@@ -53,66 +53,108 @@ first successful daily run.
 
 ---
 
-## 4. Build the custom runner image on the NAS
+## 4. Self-hosted runner: files and image
 
-The custom image pre-installs Node.js 20 and Playwright's Chromium system dependencies,
-plus Python 3 and build-essential for the `better-sqlite3` native bindings.
+The runner image extends [myoung34/github-actions-runner](https://github.com/myoung34/docker-github-actions-runner)
+with Node.js 20, Python 3, build-essential, and Playwright/Chromium system dependencies.
 
-SSH into the NAS, then:
+Keep these files together on the NAS (example path: `/volume1/docker/planscrape-runner`):
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Custom image; base is `myoung34/github-runner:latest` (see below) |
+| `docker-compose.yml` | Template: set `ACCESS_TOKEN`, adjust `REPO_URL` if not using the default repo |
+| `update-planrunner-image.sh` | Optional weekly job: rebuild with `--pull`, restart only if the image ID changed |
+
+Copy from a git clone, or fetch the current versions from GitHub:
 
 ```bash
-mkdir -p /tmp/runner-build
-curl -fsSL https://raw.githubusercontent.com/dozauk/planscrape/master/Dockerfile \
-  -o /tmp/runner-build/Dockerfile
-sudo docker build -t planscrape-runner /tmp/runner-build/
+mkdir -p /volume1/docker/planscrape-runner
+cd /volume1/docker/planscrape-runner
+curl -fsSL https://raw.githubusercontent.com/dozauk/planscrape/master/Dockerfile -o Dockerfile
+curl -fsSL https://raw.githubusercontent.com/dozauk/planscrape/master/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/dozauk/planscrape/master/update-planrunner-image.sh -o update-planrunner-image.sh
+chmod +x update-planrunner-image.sh
 ```
 
-This takes a few minutes and only needs to be repeated if the `Dockerfile` changes.
+### Base image tag
 
-> **Note:** Chromium (~200 MB) is downloaded fresh on each run because the runner container
-> is stateless. To avoid repeated downloads, you can mount a Docker volume to persist the
-> Playwright cache between container rebuilds:
-> ```bash
-> sudo docker volume create playwright-cache
-> # Add to the docker run command: -v playwright-cache:/root/.cache/ms-playwright
+The `Dockerfile` uses **`myoung34/github-runner:latest`**. Any `docker build --pull` can move
+the base forward; upstream changes occasionally break the runner until you adjust the image.
+The weekly `update-planrunner-image.sh` job limits surprises to that window and only restarts
+the container when the rebuilt image ID actually changes. If you need maximum stability,
+fork and pin to a specific tag (e.g. `ubuntu-focal`) instead of `latest`.
+
+### First-time build
+
+```bash
+cd /volume1/docker/planscrape-runner
+docker build --pull --no-cache -t planscrape-runner:latest .
+```
+
+This takes a few minutes.
+
+> **Note:** Chromium (~200 MB) is downloaded fresh on each workflow run because the runner
+> work dir is ephemeral unless you persist it. To avoid repeated Chromium downloads, mount a
+> Docker volume for the Playwright cache, e.g. add to `docker-compose.yml` under the service:
+> ```yaml
+> volumes:
+>   - runner_work:/tmp/runner
+>   - playwright-cache:/root/.cache/ms-playwright
 > ```
+> and declare `playwright-cache:` under top-level `volumes:`.
 
 ---
 
-## 5. Register a GitHub Actions runner token
+## 5. Personal Access Token (runner registration)
 
-Go to your repo → **Settings** → **Actions** → **Runners** → **New self-hosted runner**
+The compose template uses `ACCESS_TOKEN`: a **classic** GitHub PAT so the container can
+obtain a fresh runner registration token on each start. That avoids `RUNNER_TOKEN`, which
+expires after about one hour.
 
-Copy the token shown in the **Configure** section. It looks like `AASXXXXXXXXXXXXXXXXXX`
-and is valid for one hour (long enough to complete step 6).
+**Requirements:**
+
+- Must be a **classic** token (not fine-grained) — fine-grained tokens do not work reliably
+  with this flow
+- Must have the **`repo`** scope
+
+**PATs expire.** When the token expires the runner fails to start (often HTTP 403). Fix:
+
+1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Generate a new classic token with `repo` scope
+3. Set `ACCESS_TOKEN` in `docker-compose.yml` (or an env file referenced by compose)
+4. Run `docker compose up -d --force-recreate`
+
+Note the expiry when you create the token and set a reminder before it lapses.
 
 ---
 
-## 6. Start the runner container
+## 6. Configure compose and start the runner
+
+1. Edit `docker-compose.yml`: set `ACCESS_TOKEN`, and `REPO_URL` if your fork is not
+   `https://github.com/dozauk/planscrape`.
+2. Start:
 
 ```bash
-sudo docker run -d \
-  --name github-runner \
-  --restart always \
-  --shm-size=256m \
-  --security-opt seccomp=unconfined \
-  -e REPO_URL=https://github.com/dozauk/planscrape \
-  -e RUNNER_NAME=synology-nas \
-  -e LABELS=self-hosted \
-  -e RUNNER_TOKEN=AASXXXXXXXXXXXXXXXXXX \
-  -e RUNNER_WORKDIR=/tmp/runner \
-  planscrape-runner
+cd /volume1/docker/planscrape-runner
+docker compose up -d
 ```
 
-Verify it connected:
+Verify:
 
 ```bash
-sudo docker logs github-runner
+docker logs github-runner
 # Should end with: Listening for Jobs
 ```
 
-Then confirm in GitHub → **Settings** → **Actions** → **Runners** — the runner should
-show as **Idle**.
+In GitHub → **Settings** → **Actions** → **Runners**, the runner should show as **Idle**.
+
+### Optional: `docker run` with a one-time token
+
+If you prefer not to use a PAT, you can run the upstream-style flow: create a self-hosted
+runner in the UI, copy the **Configure** token (valid ~1 hour), and pass `RUNNER_TOKEN` per
+[myoung34/github-runner](https://github.com/myoung34/docker-github-actions-runner) docs. The
+compose + `ACCESS_TOKEN` approach is recommended for long-lived NAS runners.
 
 ---
 
@@ -168,27 +210,45 @@ named `debug-snapshots` on every run, including failures.
 
 ### Runner container
 
-The container restarts automatically after NAS reboots (`--restart always`).
+The compose file uses `restart: on-failure:5` (adjust if you prefer `always`). After NAS
+reboots, the container should come back when Docker starts.
 
-If you need to re-register the runner (e.g. token expired, container recreated):
-
-```bash
-sudo docker rm -f github-runner
-# Get a new token from GitHub → Settings → Actions → Runners → New self-hosted runner
-sudo docker run -d ... -e RUNNER_TOKEN=NEW_TOKEN ... planscrape-runner
-```
-
-### Rebuilding the image
-
-Only needed when `Dockerfile` changes (Node.js version bump, new system dependencies):
+To fully replace the runner container (e.g. after changing env):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dozauk/planscrape/master/Dockerfile \
-  -o /tmp/runner-build/Dockerfile
-sudo docker build -t planscrape-runner /tmp/runner-build/
-sudo docker rm -f github-runner
-# Re-run step 5 (new token) then step 6
+cd /volume1/docker/planscrape-runner
+docker compose up -d --force-recreate
 ```
+
+### Weekly image rebuild (Synology Task Scheduler)
+
+A weekly task avoids stale images while **only restarting** the runner when the rebuilt
+image ID actually changes (so a no-op rebuild does not bounce the container).
+
+1. DSM → **Task Scheduler** → **Create** → **Scheduled Task** → **User-defined script**
+2. Schedule: weekly (pick a maintenance window)
+3. Command:
+
+```bash
+/volume1/docker/planscrape-runner/update-planrunner-image.sh
+```
+
+The script runs `docker build --pull` (see `update-planrunner-image.sh` in the repo). If the
+base or layers changed, `docker compose up -d` runs; if the image is unchanged, the container
+is left running.
+
+### Rebuilding manually
+
+When the `Dockerfile` changes (Node bump, new system packages), rebuild and recreate:
+
+```bash
+cd /volume1/docker/planscrape-runner
+docker build --pull --no-cache -t planscrape-runner:latest .
+docker compose up -d --force-recreate
+```
+
+If you only use `RUNNER_TOKEN` (no PAT), you need a new registration token from GitHub after
+recreate; with `ACCESS_TOKEN`, the container re-registers on its own.
 
 ### Scraper breakage
 

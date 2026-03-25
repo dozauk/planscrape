@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  github-runner:
+    image: planscrape-runner:latest
+    container_name: github-runner
+    restart: on-failure:5
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      REPO_URL: https://github.com/dozauk/planscrape
+      RUNNER_NAME: synology-nas
+      LABELS: self-hosted
+      ACCESS_TOKEN: <INSERT_ACCESS_TOKEN>
+      RUNNER_WORKDIR: /tmp/runner
+    volumes:
+      - runner_work:/tmp/runner
+    shm_size: '256mb'
+volumes:
+  runner_work:
