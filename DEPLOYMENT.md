@@ -64,7 +64,7 @@ Keep these files together on the NAS (example path: `/volume1/docker/planscrape-
 |------|---------|
 | `Dockerfile` | Custom image; base is `myoung34/github-runner:latest` (see below) |
 | `docker-compose.yml` | Template: set `ACCESS_TOKEN`, adjust `REPO_URL` if not using the default repo |
-| `update-planrunner-image.sh` | Optional weekly job: rebuild with `--pull`, restart only if the image ID changed |
+| `update-planrunner-image.sh` | Optional weekly job: pull base image, rebuild only if digest changed, restart only if rebuilt |
 
 Copy from a git clone, or fetch the current versions from GitHub:
 
@@ -222,8 +222,8 @@ docker compose up -d --force-recreate
 
 ### Weekly image rebuild (Synology Task Scheduler)
 
-A weekly task avoids stale images while **only restarting** the runner when the rebuilt
-image ID actually changes (so a no-op rebuild does not bounce the container).
+A weekly task avoids stale images while **only restarting** the runner when the base image
+actually changes (so a no-op week does not bounce the container).
 
 1. DSM → **Task Scheduler** → **Create** → **Scheduled Task** → **User-defined script**
 2. Schedule: weekly (pick a maintenance window)
@@ -233,9 +233,10 @@ image ID actually changes (so a no-op rebuild does not bounce the container).
 /volume1/docker/planscrape-runner/update-planrunner-image.sh
 ```
 
-The script runs `docker build --pull` (see `update-planrunner-image.sh` in the repo). If the
-base or layers changed, `docker compose up -d` runs; if the image is unchanged, the container
-is left running.
+The script pulls `myoung34/github-runner:latest` and compares its digest against the last
+known digest stored in `.base-digest`. If unchanged, it exits immediately without building.
+If the base image has changed, it rebuilds `planscrape-runner:latest`, saves the new digest,
+and recreates the container.
 
 ### Rebuilding manually
 
