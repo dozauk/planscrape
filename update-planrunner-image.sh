@@ -10,5 +10,6 @@ docker build --pull -t planscrape-runner:latest "$SCRIPT_DIR"
 NEW_ID="$(docker image inspect planscrape-runner:latest -f '{{.Id}}')"
 
 if [[ "$OLD_ID" != "$NEW_ID" ]]; then
+  docker compose stop --timeout 30
   docker compose up -d
 fi
