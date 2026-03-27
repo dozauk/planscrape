@@ -10,6 +10,6 @@ docker build --pull -t planscrape-runner:latest "$SCRIPT_DIR"
 NEW_ID="$(docker image inspect planscrape-runner:latest -f '{{.Id}}')"
 
 if [[ "$OLD_ID" != "$NEW_ID" ]]; then
-  docker compose stop --timeout 30
+  synowebapi --exec api=SYNO.Docker.Container method="stop" version=1 name="github-runner"
   docker compose up -d
 fi
