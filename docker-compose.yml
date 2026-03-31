@@ -12,6 +12,7 @@ services:
       LABELS: self-hosted
       ACCESS_TOKEN: <INSERT_ACCESS_TOKEN>
       RUNNER_WORKDIR: /tmp/runner
+      DISABLE_AUTO_UPDATE: 1
     volumes:
       - runner_work:/tmp/runner
     shm_size: '256mb'
