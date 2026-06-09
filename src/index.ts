@@ -6,7 +6,7 @@ import { openDb, upsertApplications, logScrapeRun, getUnclassifiedApplications, 
 import { generateHtml } from './generate';
 import { isClassificationEnabled, classifyApplication } from './classify';
 
-const DAYS_BACK = 14;
+const DAYS_BACK = parseInt(process.env.DAYS_BACK ?? '14', 10);
 const DB_RETENTION_DAYS = 90;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 20_000;

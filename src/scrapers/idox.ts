@@ -54,13 +54,21 @@ function parseIdoxDate(raw: string): string | undefined {
 /**
  * Extract text after a label in a metaInfo paragraph.
  * e.g. extractAfter("Ref. No: 26/00395/FULL | ...", "Ref. No:") → "26/00395/FULL"
+ * Handles both TW format (| separators) and Sevenoaks format (newline separators).
  */
 function extractAfter(text: string, label: string): string {
   const idx = text.indexOf(label);
   if (idx === -1) return '';
   const after = text.slice(idx + label.length).trim();
   const pipe = after.indexOf('|');
-  return (pipe === -1 ? after : after.slice(0, pipe)).trim();
+  const nl = after.indexOf('\n');
+  // Stop at whichever delimiter comes first
+  let end: number;
+  if (pipe === -1 && nl === -1) end = after.length;
+  else if (pipe === -1) end = nl;
+  else if (nl === -1) end = pipe;
+  else end = Math.min(pipe, nl);
+  return after.slice(0, end).trim();
 }
 
 /**
@@ -179,7 +187,9 @@ async function parseResultsPage(
     const applreference = extractAfter(metaText, 'Ref. No:');
     const receivedRaw   = extractAfter(metaText, 'Received:');
     const validatedRaw  = extractAfter(metaText, 'Validated:');
-    const status        = extractAfter(metaText, 'Status:') || undefined;
+    // TW puts status inline in metaInfo; Sevenoaks puts it in a .badge-status div
+    const badgeStatus = (await item.locator('.badge-status .value').textContent().catch(() => ''))?.trim();
+    const status = badgeStatus || extractAfter(metaText, 'Status:') || undefined;
 
     const datereceived  = parseIdoxDate(receivedRaw);
     const datevalidated = parseIdoxDate(validatedRaw);
@@ -214,8 +224,9 @@ async function runWeeklyListSearch(
   // Select "Decided in this week" radio
   await page.locator('input[name="dateType"][value="DC_Decided"]').check();
 
-  // Submit and wait for results list, no-results indicator, or single-result redirect
-  await page.click('input[value="Search"], button[type="submit"]');
+  // noWaitAfter prevents page.click() from hanging on the recaptcha-submit class,
+  // which triggers a secondary navigation that never resolves in headless mode.
+  await page.click('input[value="Search"], button[type="submit"]', { noWaitAfter: true });
   await page.waitForSelector('#searchresults, .noResults, .messagebox, #simpleDetailsTable', { timeout: 60000 });
 
   // Single-result redirect

@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 7 * * *'   # Every day at 07:00 UTC
   workflow_dispatch:        # Allow manual trigger
+    inputs:
+      days_back:
+        description: 'How many days back to search (default 14; increase for backfill)'
+        required: false
+        default: '14'
 
 permissions:
   contents: read
@@ -50,6 +55,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLASSIFICATION_PROMPT: ${{ secrets.CLASSIFICATION_PROMPT }}
+          DAYS_BACK: ${{ inputs.days_back || '14' }}
 
       - name: Upload DB artifact
         if: always()
