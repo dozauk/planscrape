@@ -114,14 +114,16 @@ interface DetailData {
   decision_date?: string;
   appeal_decision?: string;
   appeal_date?: string;
+  rateLimited?: boolean;
 }
 
 /**
  * Visit an Idox application detail page and extract decision + appeal fields.
- * Retries once on HTTP 429 with a longer backoff before giving up.
+ * Retries once on HTTP 429 with a longer backoff. Sets rateLimited on the second 429
+ * so the caller can abort the remaining fetch queue rather than hammering the server.
  */
 async function fetchDetail(page: Page, url: string): Promise<DetailData> {
-  const RETRY_DELAY_MS = 15_000;
+  const RETRY_DELAY_MS = 30_000;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -131,7 +133,8 @@ async function fetchDetail(page: Page, url: string): Promise<DetailData> {
           await page.waitForTimeout(RETRY_DELAY_MS);
           continue;
         }
-        return {};
+        console.log(`  429 again after backoff — rate limited, will skip remaining detail pages`);
+        return { rateLimited: true };
       }
       const raw = await page.evaluate(() => {
         const rows: Record<string, string> = {};
@@ -187,8 +190,9 @@ async function parseResultsPage(
     const applreference = extractAfter(metaText, 'Ref. No:');
     const receivedRaw   = extractAfter(metaText, 'Received:');
     const validatedRaw  = extractAfter(metaText, 'Validated:');
-    // TW puts status inline in metaInfo; Sevenoaks puts it in a .badge-status div
-    const badgeStatus = (await item.locator('.badge-status .value').textContent().catch(() => ''))?.trim();
+    // TW puts status inline in metaInfo; Sevenoaks puts it in a .badge-status div.
+    // Short timeout so TW (no badge div) fails fast rather than waiting 30 s per item.
+    const badgeStatus = (await item.locator('.badge-status .value').textContent({ timeout: 500 }).catch(() => ''))?.trim();
     const status = badgeStatus || extractAfter(metaText, 'Status:') || undefined;
 
     const datereceived  = parseIdoxDate(receivedRaw);
@@ -285,6 +289,14 @@ export async function scrapeIdox(
   const page = await browser.newPage();
   attachDiagnosticListeners(page, council);
 
+  // Block ArcGIS/ESRI map requests. TW's results pages embed an ArcGIS web map whose
+  // background requests (generateToken, proxy redirects, arcgisonline.com geometry service)
+  // are tracked by Playwright as scheduled navigations, causing pagination clicks to throw
+  // "The operation was canceled" when one of those proxy redirects races with our click.
+  // Scoped to TW's portal subdomain to avoid affecting other councils' routes.
+  await page.route(/arcgis/i, route => route.abort());
+  await page.route(`${baseUrl.replace(/\/online-applications$/, '')}/portal/sharing/**`, route => route.abort());
+
   try {
     // Determine which weeks to fetch. We always include the current week.
     // If daysBack > 7, also include the previous week to ensure full coverage
@@ -337,13 +349,24 @@ export async function scrapeIdox(
     }
 
     console.log(`[${council}] Detail pages: ${needsDetail.length} to fetch, ${fromCache.length} served from DB cache`);
+    let rateLimitedCount = 0;
     for (const app of needsDetail) {
+      console.log(`[${council}]   Fetching detail: ${app.applreference}`);
       const detail = await fetchDetail(page, app.detailsurl);
+      if (detail.rateLimited) {
+        rateLimitedCount++;
+        console.log(`[${council}] Rate limited — skipping ${needsDetail.length - needsDetail.indexOf(app) - 1} remaining detail page(s)`);
+        break;
+      }
       app.decision        = detail.decision;
       app.decision_date   = detail.decision_date;
       app.appeal_decision = detail.appeal_decision;
       app.appeal_date     = detail.appeal_date;
+      console.log(`[${council}]   → decision=${app.decision ?? 'none'} date=${app.decision_date ?? 'none'}`);
       await page.waitForTimeout(3000);
+    }
+    if (rateLimitedCount > 0) {
+      console.warn(`[${council}] Warning: rate limited — some apps stored without decisions (will retry next run)`);
     }
 
     console.log(`[${council}] Found ${relevant.length} applications (${all.length} total before type filter)`);
